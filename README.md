@@ -61,16 +61,38 @@ test/            Node test runner coverage for MVP logic
 
 ## Local Engine Demo
 
-This initial scaffold has no external runtime dependencies.
-
 ```bash
+npm install
+npm run db:generate
+npm run db:seed
 npm test
 npm run demo
+npm run demo:db
 ```
 
 The demo validates the core claim: opposite hedge demand can be internally
 matched, residual exposure can be calculated, and the avoided external liquidity
 can be shown in bps and USD terms.
+
+`npm run demo` exercises the deterministic core in memory. `npm run demo:db`
+reads seeded intents from SQLite through Prisma, persists the match, allocation,
+and agent decision records, and proves the same flow with real database state.
+
+## Mantle Sepolia
+
+```bash
+npm run compile
+npm run chain:check
+```
+
+Deployment requires a Mantle Sepolia-funded private key in `.env`.
+
+```bash
+npm run deploy:mantle-sepolia
+```
+
+See [docs/deployment.md](docs/deployment.md) for network, database, and deploy
+details.
 
 ## MVP Scope
 
@@ -93,4 +115,3 @@ Out of scope for hackathon MVP:
 - Insurance fund
 - Oracle dispute system
 - Real-money synthetic settlement
-

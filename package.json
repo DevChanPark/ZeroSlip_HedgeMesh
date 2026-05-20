@@ -5,11 +5,27 @@
   "type": "module",
   "description": "AI-powered hedge intent netting layer on Mantle",
   "scripts": {
+    "chain:check": "node scripts/check-mantle-sepolia-rpc.cjs",
+    "compile": "HOME=$PWD/.hardhat-home HARDHAT_DISABLE_TELEMETRY_PROMPT=true hardhat compile",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node prisma/seed.js",
+    "deploy:mantle-sepolia": "HOME=$PWD/.hardhat-home HARDHAT_DISABLE_TELEMETRY_PROMPT=true hardhat run scripts/deploy-mantle-sepolia.cjs --network mantleSepolia",
     "demo": "node scripts/run-demo.js",
+    "demo:db": "node scripts/run-db-demo.js",
     "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=18.4"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "dotenv": "16.4.5",
+    "ethers": "5.7.2"
+  },
+  "devDependencies": {
+    "@nomiclabs/hardhat-ethers": "2.2.3",
+    "hardhat": "2.22.17",
+    "prisma": "5.22.0"
   }
 }
-

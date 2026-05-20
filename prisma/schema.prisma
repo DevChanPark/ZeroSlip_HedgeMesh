@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model HedgeIntent {
+  id                String          @id
+  walletAddress     String
+  asset             String
+  direction         String
+  notionalUsd       Decimal
+  durationMinutes   Int
+  maxCostBps        Decimal
+  urgency           String
+  status            String          @default("OPEN")
+  filledNotionalUsd Decimal         @default(0)
+  naturalLanguage   String?
+  parserConfidence  Decimal?
+  onchainIntentId   String?
+  submitTxHash      String?
+  createdAt         DateTime        @default(now())
+  expiresAt         DateTime
+  updatedAt         DateTime        @updatedAt
+  shortAllocations  MatchAllocation[] @relation("ShortIntentAllocation")
+  longAllocations   MatchAllocation[] @relation("LongIntentAllocation")
+
+  @@index([asset, direction, status])
+  @@index([walletAddress])
+  @@index([expiresAt])
+}
+
+model HedgeMatch {
+  id                          String              @id
+  asset                       String
+  matchedNotionalUsd          Decimal
+  residualDirection           String
+  residualNotionalUsd         Decimal
+  naiveExternalVolumeUsd      Decimal
+  meshExternalVolumeUsd       Decimal
+  externalLiquidityAvoidedUsd Decimal
+  naiveCostBps                Decimal
+  meshCostBps                 Decimal
+  savedCostBps                Decimal
+  savedCostUsd                Decimal
+  onchainMatchId              String?
+  logTxHash                   String?
+  createdAt                   DateTime            @default(now())
+  allocations                 MatchAllocation[]
+  decisions                   AgentDecision[]
+
+  @@index([asset, createdAt])
+}
+
+model MatchAllocation {
+  id            String      @id
+  matchId       String
+  shortIntentId String
+  longIntentId  String
+  matchedUsd    Decimal
+  createdAt     DateTime    @default(now())
+  match         HedgeMatch  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  shortIntent   HedgeIntent @relation("ShortIntentAllocation", fields: [shortIntentId], references: [id])
+  longIntent    HedgeIntent @relation("LongIntentAllocation", fields: [longIntentId], references: [id])
+
+  @@index([matchId])
+  @@index([shortIntentId])
+  @@index([longIntentId])
+}
+
+model AgentDecision {
+  id                String       @id
+  matchId           String?
+  decisionType      String
+  asset             String
+  internalMatchUsd  Decimal
+  residualUsd       Decimal
+  reason            String
+  risksJson         String
+  recommendedAction String
+  txHash            String?
+  createdAt         DateTime     @default(now())
+  match             HedgeMatch?  @relation(fields: [matchId], references: [id], onDelete: SetNull)
+
+  @@index([asset, createdAt])
+  @@index([decisionType])
+}
+
+model ChainDeployment {
+  id              String   @id
+  network         String
+  chainId         Int
+  contractName    String
+  contractAddress String
+  deployTxHash    String
+  deployerAddress String
+  explorerUrl     String?
+  createdAt       DateTime @default(now())
+
+  @@unique([network, contractName])
+  @@index([chainId])
+}
+
+model ChainEvent {
+  id              String   @id
+  network         String
+  chainId         Int
+  contractName    String
+  contractAddress String
+  eventName       String
+  txHash          String
+  blockNumber     Int?
+  payloadJson     String
+  createdAt       DateTime @default(now())
+
+  @@index([network, eventName])
+  @@index([txHash])
+}
