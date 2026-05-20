@@ -1,0 +1,156 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, openSync, closeSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Readable, Writable } from "node:stream";
+import test from "node:test";
+
+import { PrismaClient } from "@prisma/client";
+
+import { createRequestHandler } from "../src/server/app.js";
+
+const NOW = Date.parse("2026-05-20T00:00:00.000Z");
+
+class MockRequest extends Readable {
+  constructor(method, url, payload) {
+    super();
+    this.method = method;
+    this.url = url;
+    this.payload = payload;
+  }
+
+  _read() {
+    if (this.payload !== undefined) {
+      this.push(Buffer.from(this.payload));
+      this.payload = undefined;
+    } else {
+      this.push(null);
+    }
+  }
+}
+
+class MockResponse extends Writable {
+  constructor() {
+    super();
+    this.statusCode = 200;
+    this.body = "";
+  }
+
+  writeHead(statusCode, headers) {
+    this.statusCode = statusCode;
+    this.headers = headers;
+  }
+
+  _write(chunk, _encoding, callback) {
+    this.body += chunk.toString("utf8");
+    callback();
+  }
+
+  end(chunk) {
+    if (chunk) this.body += chunk.toString("utf8");
+    super.end();
+  }
+}
+
+test("HTTP API persists intents, matches them, and returns decision state", async () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "zeroslip-api-"));
+  const dbFileName = `api-test-${process.pid}-${Date.now()}.db`;
+  const dbPath = path.join(process.cwd(), "prisma", dbFileName);
+  closeSync(openSync(dbPath, "w"));
+  const databaseUrl = `file:./${dbFileName}`;
+
+  const migrationSql = readFileSync(
+    path.join(process.cwd(), "prisma/migrations/20260520092117_init/migration.sql"),
+    "utf8"
+  );
+  execFileSync("sqlite3", [dbPath], { input: migrationSql, stdio: ["pipe", "ignore", "ignore"] });
+
+  const prisma = new PrismaClient({
+    datasources: {
+      db: {
+        url: databaseUrl
+      }
+    }
+  });
+  const handler = createRequestHandler({ prisma, now: () => NOW });
+
+  try {
+    const shortIntent = await invokeJson(handler, "POST", "/api/intents", {
+      intentId: "api_short_mnt_10000",
+      user: "0xA000000000000000000000000000000000000001",
+      asset: "MNT",
+      direction: "SHORT",
+      notionalUsd: 10000,
+      durationMinutes: 60,
+      maxCostBps: 30,
+      urgency: "MEDIUM"
+    });
+    assert.equal(shortIntent.status, 201, JSON.stringify(shortIntent.body));
+    assert.equal(shortIntent.body.status, "OPEN");
+
+    await invokeJson(handler, "POST", "/api/intents", {
+      intentId: "api_long_mnt_7000",
+      user: "0xB000000000000000000000000000000000000002",
+      asset: "MNT",
+      direction: "LONG",
+      notionalUsd: 7000,
+      durationMinutes: 60,
+      maxCostBps: 30,
+      urgency: "MEDIUM"
+    });
+
+    const book = await invokeJson(handler, "GET", "/api/intents?asset=MNT");
+    assert.equal(book.status, 200);
+    assert.equal(book.body.shortDemandUsd, 10000);
+    assert.equal(book.body.longDemandUsd, 7000);
+
+    const match = await invokeJson(handler, "POST", "/api/matching/run", {
+      asset: "MNT",
+      matchId: "api_match_mnt",
+      decisionId: "api_decision_mnt",
+      maxCostBps: 30,
+      urgency: "MEDIUM"
+    });
+
+    assert.equal(match.status, 201);
+    assert.equal(match.body.matchResult.matchedNotionalUsd, 7000);
+    assert.equal(match.body.matchResult.residualDirection, "SHORT");
+    assert.equal(match.body.costComparison.externalLiquidityAvoidedUsd, 14000);
+    assert.equal(match.body.decision.decisionType, "MATCH");
+
+    const persistedShort = await prisma.hedgeIntent.findUniqueOrThrow({
+      where: { id: "api_short_mnt_10000" }
+    });
+    const persistedLong = await prisma.hedgeIntent.findUniqueOrThrow({
+      where: { id: "api_long_mnt_7000" }
+    });
+    assert.equal(Number(persistedShort.filledNotionalUsd), 7000);
+    assert.equal(persistedShort.status, "PARTIALLY_MATCHED");
+    assert.equal(Number(persistedLong.filledNotionalUsd), 7000);
+    assert.equal(persistedLong.status, "MATCHED");
+
+    const decision = await invokeJson(handler, "GET", "/api/decisions/api_decision_mnt");
+    assert.equal(decision.status, 200);
+    assert.equal(decision.body.decisionType, "MATCH");
+    assert.equal(decision.body.matchId, "api_match_mnt");
+  } finally {
+    await prisma.$disconnect();
+    rmSync(dbPath, { force: true });
+    rmSync(`${dbPath}-journal`, { force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+async function invokeJson(handler, method, pathName, body) {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  const req = new MockRequest(method, pathName, payload);
+  const res = new MockResponse();
+
+  await handler(req, res);
+
+  return {
+    status: res.statusCode,
+    body: res.body ? JSON.parse(res.body) : null
+  };
+}

@@ -13,6 +13,7 @@
     "deploy:mantle-sepolia": "HOME=$PWD/.hardhat-home HARDHAT_DISABLE_TELEMETRY_PROMPT=true hardhat run scripts/deploy-mantle-sepolia.cjs --network mantleSepolia",
     "demo": "node scripts/run-demo.js",
     "demo:db": "node scripts/run-db-demo.js",
+    "api": "node src/server/server.js",
     "test": "node --test"
   },
   "engines": {

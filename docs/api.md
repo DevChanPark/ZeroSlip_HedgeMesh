@@ -1,5 +1,28 @@
 # API Draft
 
+The current local API is implemented with Node's built-in HTTP server and
+Prisma-backed SQLite persistence. Run it with:
+
+```bash
+npm run api
+```
+
+Default local URL:
+
+```text
+http://127.0.0.1:3000
+```
+
+## GET /health
+
+Response:
+
+```json
+{
+  "ok": true
+}
+```
+
 ## POST /api/intent/parse
 
 Parse natural language into a structured hedge intent.
@@ -53,6 +76,8 @@ Response:
 }
 ```
 
+The API persists the intent into the `HedgeIntent` table.
+
 ## GET /api/intents?asset=MNT
 
 Return intent book summary.
@@ -82,14 +107,33 @@ Response:
 
 ```json
 {
-  "asset": "MNT",
-  "internalMatchUsd": 7000,
-  "residualDirection": "SHORT",
-  "residualUsd": 3000,
-  "internalMatchRate": 0.7,
-  "decision": "MATCH"
+  "matchResult": {
+    "asset": "MNT",
+    "matchedNotionalUsd": 7000,
+    "residualDirection": "SHORT",
+    "residualNotionalUsd": 3000,
+    "internalMatchRate": 0.7
+  },
+  "costComparison": {
+    "naiveExternalVolumeUsd": 17000,
+    "meshExternalVolumeUsd": 3000,
+    "externalLiquidityAvoidedUsd": 14000,
+    "naiveCostBps": 26,
+    "meshCostBps": 6.6,
+    "savedCostBps": 19.4
+  },
+  "decision": {
+    "decisionType": "MATCH"
+  }
 }
 ```
+
+The API persists:
+
+- `HedgeMatch`
+- `MatchAllocation`
+- updated `HedgeIntent.filledNotionalUsd` and `HedgeIntent.status`
+- `AgentDecision`
 
 ## POST /api/cost/compare
 
@@ -137,3 +181,24 @@ Response:
 }
 ```
 
+## GET /api/decisions/:decisionId
+
+Read a persisted agent decision.
+
+Response:
+
+```json
+{
+  "decisionId": "decision_001",
+  "decisionType": "MATCH",
+  "asset": "MNT",
+  "internalMatchUsd": 7000,
+  "residualUsd": 3000,
+  "reason": "Matched $7,000 of opposite MNT hedge intents internally.",
+  "risks": [
+    "Residual hedge exposure remains unmatched"
+  ],
+  "recommendedAction": "Log match and simulate residual route",
+  "matchId": "match_001"
+}
+```

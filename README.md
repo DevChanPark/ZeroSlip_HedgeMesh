@@ -94,6 +94,16 @@ npm run deploy:mantle-sepolia
 See [docs/deployment.md](docs/deployment.md) for network, database, and deploy
 details.
 
+## Backend API
+
+```bash
+npm run api
+```
+
+The API uses Prisma-backed SQLite state by default and exposes the core MVP
+flow: parse intent, create intent, query the intent book, run matching, compare
+costs, and read agent decisions.
+
 ## MVP Scope
 
 P0:
