@@ -14,19 +14,37 @@
     "demo": "node scripts/run-demo.js",
     "demo:db": "node scripts/run-db-demo.js",
     "api": "node src/server/server.js",
+    "api:legacy": "PORT=3000 node src/server/server.js",
+    "web": "next dev -H 127.0.0.1 -p 3000",
+    "web:build": "next build",
+    "web:start": "next start -H 127.0.0.1 -p 3000",
     "test": "node --test"
   },
   "engines": {
-    "node": ">=18.4"
+    "node": ">=20.9"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",
+    "@tanstack/react-query": "5.100.11",
     "dotenv": "16.4.5",
-    "ethers": "5.7.2"
+    "lucide-react": "0.468.0",
+    "next": "16.2.6",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "viem": "2.50.4",
+    "wagmi": "3.6.15"
   },
   "devDependencies": {
     "@nomiclabs/hardhat-ethers": "2.2.3",
+    "@types/node": "20.11.30",
+    "@types/react": "18.2.66",
+    "@types/react-dom": "18.2.22",
+    "autoprefixer": "10.4.20",
+    "ethers": "5.8.0",
     "hardhat": "2.22.17",
-    "prisma": "5.22.0"
+    "postcss": "8.4.49",
+    "prisma": "5.22.0",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.9.3"
   }
 }

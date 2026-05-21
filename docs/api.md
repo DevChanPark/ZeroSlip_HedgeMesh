@@ -10,8 +10,11 @@ npm run api
 Default local URL:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3001
 ```
+
+The Next.js web console runs on `http://127.0.0.1:3000` and proxies `/api/*`
+to this backend.
 
 ## GET /health
 

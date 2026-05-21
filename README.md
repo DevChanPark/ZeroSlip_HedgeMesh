@@ -62,6 +62,8 @@ test/            Node test runner coverage for MVP logic
 ## Local Engine Demo
 
 ```bash
+nvm install
+nvm use
 npm install
 npm run db:generate
 npm run db:seed
@@ -100,9 +102,22 @@ details.
 npm run api
 ```
 
-The API uses Prisma-backed SQLite state by default and exposes the core MVP
-flow: parse intent, create intent, query the intent book, run matching, compare
-costs, and read agent decisions.
+The API listens on `http://127.0.0.1:3001` by default. It uses Prisma-backed
+SQLite state by default and exposes the core MVP flow: parse intent, create
+intent, query the intent book, run matching, compare costs, and read agent
+decisions.
+
+## Web Console
+
+```bash
+npm run api
+npm run web
+```
+
+Run the two commands in separate terminals. The Next.js console opens at
+`http://127.0.0.1:3000` and proxies `/api/*` requests to the backend on port
+`3001`. The web console uses wagmi/viem to submit intents and decision logs to
+the deployed Mantle Sepolia contracts.
 
 ## MVP Scope
 
