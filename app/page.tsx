@@ -11,8 +11,8 @@ import {
   Wand2
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useAccount, useChainId, useConnect, useDisconnect, useSendTransaction, useSwitchChain } from "wagmi";
-import { encodeFunctionData } from "viem";
+import { useAccount, useChainId, useConnect, useDisconnect, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi";
+import { encodeFunctionData, parseEventLogs } from "viem";
 
 import { mantleSepolia } from "./providers";
 
@@ -37,6 +37,7 @@ type HedgeIntent = HedgeIntentDraft & {
   user: string;
   status: string;
   filledNotionalUsd: number;
+  onchainIntentId?: string | null;
   submitTxHash?: string | null;
 };
 
@@ -76,6 +77,8 @@ type ChainEvent = {
   eventName: string;
   contractName: string;
   txHash: string;
+  blockNumber?: number | null;
+  payload?: Record<string, unknown>;
   createdAt: number;
 };
 
@@ -100,6 +103,21 @@ const intentBookAbi = [
       { name: "urgency", type: "string" }
     ],
     outputs: [{ name: "intentId", type: "bytes32" }]
+  },
+  {
+    type: "event",
+    name: "HedgeIntentSubmitted",
+    inputs: [
+      { indexed: true, name: "intentId", type: "bytes32" },
+      { indexed: true, name: "user", type: "address" },
+      { indexed: false, name: "asset", type: "string" },
+      { indexed: false, name: "direction", type: "string" },
+      { indexed: false, name: "notionalUsd", type: "uint256" },
+      { indexed: false, name: "durationMinutes", type: "uint256" },
+      { indexed: false, name: "maxCostBps", type: "uint256" },
+      { indexed: false, name: "createdAt", type: "uint256" },
+      { indexed: false, name: "expiresAt", type: "uint256" }
+    ]
   }
 ] as const;
 
@@ -129,6 +147,30 @@ const matchLogAbi = [
       { name: "estimatedSavingsBps", type: "uint256" }
     ],
     outputs: []
+  },
+  {
+    type: "event",
+    name: "HedgeMatched",
+    inputs: [
+      { indexed: true, name: "matchId", type: "bytes32" },
+      { indexed: false, name: "asset", type: "string" },
+      { indexed: false, name: "matchedNotionalUsd", type: "uint256" },
+      { indexed: false, name: "residualNotionalUsd", type: "uint256" },
+      { indexed: false, name: "estimatedSavingsBps", type: "uint256" },
+      { indexed: false, name: "createdAt", type: "uint256" }
+    ]
+  },
+  {
+    type: "event",
+    name: "AgentDecisionLogged",
+    inputs: [
+      { indexed: true, name: "decisionId", type: "bytes32" },
+      { indexed: false, name: "decisionType", type: "string" },
+      { indexed: false, name: "internalMatchUsd", type: "uint256" },
+      { indexed: false, name: "residualUsd", type: "uint256" },
+      { indexed: false, name: "estimatedSavingsBps", type: "uint256" },
+      { indexed: false, name: "createdAt", type: "uint256" }
+    ]
   }
 ] as const;
 
@@ -148,6 +190,7 @@ export default function HomePage() {
   const { disconnect } = useDisconnect();
   const { switchChainAsync } = useSwitchChain();
   const { sendTransactionAsync } = useSendTransaction();
+  const publicClient = usePublicClient({ chainId: mantleSepolia.id });
 
   const [naturalLanguage, setNaturalLanguage] = useState(
     "I want to hedge $1,000 of MNT downside risk for 1 hour. Keep cost under 10 bps."
@@ -235,6 +278,7 @@ export default function HomePage() {
   async function submitIntent() {
     await runBusy("submit", async () => {
       if (!address) throw new Error("Connect wallet first");
+      if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
       await ensureMantleSepolia();
 
       const data = encodeFunctionData({
@@ -255,6 +299,19 @@ export default function HomePage() {
         to: CONTRACTS.intentBook,
         data
       });
+      setIntentOutput(JSON.stringify({ txHash, status: "waiting_for_receipt", explorer: txLink(txHash) }, null, 2));
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (receipt.status !== "success") {
+        throw new Error(`Intent submit reverted: ${txHash}`);
+      }
+      const submittedLog = parseEventLogs({
+        abi: intentBookAbi,
+        eventName: "HedgeIntentSubmitted",
+        logs: receipt.logs
+      })[0];
+      const submittedArgs = submittedLog?.args;
+      const onchainIntentId = submittedArgs?.intentId ?? null;
 
       const saved = await api<HedgeIntent>("/api/intents", {
         method: "POST",
@@ -263,12 +320,37 @@ export default function HomePage() {
           user: address,
           naturalLanguage,
           parserConfidence: parsed?.confidence ?? null,
+          onchainIntentId,
           submitTxHash: txHash
         }
       });
 
-      setIntentOutput(JSON.stringify({ txHash, explorer: txLink(txHash), dbIntent: saved }, null, 2));
+      await recordChainEvent({
+        eventName: "HedgeIntentSubmitted",
+        contractName: "IntentBook",
+        contractAddress: CONTRACTS.intentBook,
+        txHash,
+        blockNumber: blockNumberToNumber(receipt.blockNumber),
+        intentId: saved.intentId,
+        onchainId: onchainIntentId,
+        payload: stringifyBigInts(submittedArgs ?? {})
+      });
+
+      setIntentOutput(
+        JSON.stringify(
+          {
+            txHash,
+            blockNumber: blockNumberToNumber(receipt.blockNumber),
+            onchainIntentId,
+            explorer: txLink(txHash),
+            dbIntent: saved
+          },
+          null,
+          2
+        )
+      );
       await refreshBook();
+      await refreshEvents();
     });
   }
 
@@ -296,6 +378,7 @@ export default function HomePage() {
     await runBusy("log", async () => {
       if (!address) throw new Error("Connect wallet first");
       if (!latestMatch) throw new Error("Run matching first");
+      if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
       await ensureMantleSepolia();
 
       const savingsBps = BigInt(Math.max(0, Math.round(latestMatch.costComparison.savedCostBps)));
@@ -318,18 +401,31 @@ export default function HomePage() {
         to: CONTRACTS.matchLog,
         data: matchData
       });
+      setChainOutput(JSON.stringify({ matchTxHash, status: "waiting_for_match_receipt", explorer: txLink(matchTxHash) }, null, 2));
+
+      const matchReceipt = await publicClient.waitForTransactionReceipt({ hash: matchTxHash });
+      if (matchReceipt.status !== "success") {
+        throw new Error(`Match log reverted: ${matchTxHash}`);
+      }
+      const matchedLog = parseEventLogs({
+        abi: matchLogAbi,
+        eventName: "HedgeMatched",
+        logs: matchReceipt.logs
+      })[0];
+      const matchedArgs = matchedLog?.args;
 
       await recordChainEvent({
         eventName: "HedgeMatched",
         txHash: matchTxHash,
+        blockNumber: blockNumberToNumber(matchReceipt.blockNumber),
         matchId: latestMatch.matchResult.matchId,
-        onchainId: matchId,
-        payload: {
+        onchainId: matchedArgs?.matchId ?? matchId,
+        payload: stringifyBigInts(matchedArgs ?? {
           asset: latestMatch.matchResult.asset,
           matchedNotionalUsd: latestMatch.matchResult.matchedNotionalUsd,
           residualNotionalUsd: latestMatch.matchResult.residualNotionalUsd,
-          estimatedSavingsBps: Number(savingsBps)
-        }
+          estimatedSavingsBps: savingsBps
+        })
       });
 
       const decisionData = encodeFunctionData({
@@ -348,28 +444,57 @@ export default function HomePage() {
         to: CONTRACTS.matchLog,
         data: decisionData
       });
-
-      await recordChainEvent({
-        eventName: "AgentDecisionLogged",
-        txHash: decisionTxHash,
-        decisionId: latestMatch.decision.decisionId,
-        onchainId: decisionId,
-        payload: {
-          decisionType: latestMatch.decision.decisionType,
-          internalMatchUsd: latestMatch.decision.internalMatchUsd,
-          residualUsd: latestMatch.decision.residualUsd,
-          estimatedSavingsBps: Number(savingsBps)
-        }
-      });
-
       setChainOutput(
         JSON.stringify(
           {
             matchTxHash,
+            matchBlockNumber: blockNumberToNumber(matchReceipt.blockNumber),
             decisionTxHash,
-            matchExplorer: txLink(matchTxHash),
+            status: "waiting_for_decision_receipt",
             decisionExplorer: txLink(decisionTxHash)
           },
+          null,
+          2
+        )
+      );
+
+      const decisionReceipt = await publicClient.waitForTransactionReceipt({ hash: decisionTxHash });
+      if (decisionReceipt.status !== "success") {
+        throw new Error(`Decision log reverted: ${decisionTxHash}`);
+      }
+      const decisionLog = parseEventLogs({
+        abi: matchLogAbi,
+        eventName: "AgentDecisionLogged",
+        logs: decisionReceipt.logs
+      })[0];
+      const decisionArgs = decisionLog?.args;
+
+      await recordChainEvent({
+        eventName: "AgentDecisionLogged",
+        txHash: decisionTxHash,
+        blockNumber: blockNumberToNumber(decisionReceipt.blockNumber),
+        decisionId: latestMatch.decision.decisionId,
+        onchainId: decisionArgs?.decisionId ?? decisionId,
+        payload: stringifyBigInts(decisionArgs ?? {
+          decisionType: latestMatch.decision.decisionType,
+          internalMatchUsd: latestMatch.decision.internalMatchUsd,
+          residualUsd: latestMatch.decision.residualUsd,
+          estimatedSavingsBps: savingsBps
+        })
+      });
+
+      setChainOutput(
+        JSON.stringify(
+          stringifyBigInts({
+            matchTxHash,
+            decisionTxHash,
+            matchBlockNumber: matchReceipt.blockNumber,
+            decisionBlockNumber: decisionReceipt.blockNumber,
+            matchExplorer: txLink(matchTxHash),
+            decisionExplorer: txLink(decisionTxHash),
+            matchedEvent: matchedArgs ?? null,
+            decisionEvent: decisionArgs ?? null
+          }),
           null,
           2
         )
@@ -709,6 +834,22 @@ function Output({ tall, value }: { tall?: boolean; value: string }) {
   );
 }
 
+function blockNumberToNumber(value: bigint | number | null | undefined) {
+  if (value === null || value === undefined) return null;
+  return typeof value === "bigint" ? Number(value) : value;
+}
+
+function stringifyBigInts(value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) return value.map((item) => stringifyBigInts(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, stringifyBigInts(item)])
+    );
+  }
+  return value;
+}
+
 async function api<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
   const response = await fetch(path, {
     method: options.method ?? "GET",
@@ -723,7 +864,7 @@ async function api<T>(path: string, options: { method?: string; body?: unknown }
 }
 
 async function bytes32FromText(text: string): Promise<`0x${string}`> {
-  const bytes = new TextEncoder().encode(`${text}:${Date.now()}:${Math.random()}`);
+  const bytes = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `0x${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
