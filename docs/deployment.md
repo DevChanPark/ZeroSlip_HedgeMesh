@@ -64,3 +64,15 @@ deployments/mantle-sepolia.json
 It also persists contract addresses into the `ChainDeployment` table when the
 Prisma client and database are available.
 
+## Operator Wallet
+
+The deployer wallet is the initial `operator` for both contracts.
+
+- `IntentBook.markIntentMatched` requires the `IntentBook` operator.
+- `MatchLog.logMatch` and `MatchLog.logAgentDecision` require the `MatchLog`
+  operator.
+
+The web console reads each contract's `operator()` value on Mantle Sepolia and
+shows it in the header. Use the same wallet as the operator when pressing
+`Sync Fills` or `Log Decision`; otherwise the UI blocks the action before
+sending a transaction.

@@ -133,6 +133,12 @@ type ChainEvent = {
   createdAt: number;
 };
 
+type OperatorState = {
+  intentBook?: `0x${string}`;
+  matchLog?: `0x${string}`;
+  loaded: boolean;
+};
+
 type DashboardResponse = {
   totals: {
     intentCount: number;
@@ -170,6 +176,13 @@ const CONTRACTS = {
 const EXPLORER = "https://explorer.sepolia.mantle.xyz";
 
 const intentBookAbi = [
+  {
+    type: "function",
+    name: "operator",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
   {
     type: "function",
     name: "submitIntent",
@@ -255,6 +268,13 @@ const intentBookAbi = [
 const matchLogAbi = [
   {
     type: "function",
+    name: "operator",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
     name: "logMatch",
     stateMutability: "nonpayable",
     inputs: [
@@ -332,6 +352,7 @@ export default function HomePage() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [latestMatch, setLatestMatch] = useState<MatchResponse | null>(null);
   const [events, setEvents] = useState<ChainEvent[]>([]);
+  const [operators, setOperators] = useState<OperatorState>({ loaded: false });
   const [intentOutput, setIntentOutput] = useState("Ready.");
   const [chainOutput, setChainOutput] = useState("No chain log yet.");
   const [busy, setBusy] = useState<string | null>(null);
@@ -340,6 +361,10 @@ export default function HomePage() {
   const networkLabel = chainId === mantleSepolia.id ? "Mantle Sepolia" : "Wrong network";
   const connectedLabel = isConnected && address ? shortAddress(address) : "No wallet";
   const dashboardTotals = dashboard?.totals;
+  const canOperateIntentBook = isSameAddress(address, operators.intentBook);
+  const canOperateMatchLog = isSameAddress(address, operators.matchLog);
+  const intentBookOperatorTone = canOperateIntentBook ? "ready" : operators.loaded && isConnected ? "warn" : undefined;
+  const matchLogOperatorTone = canOperateMatchLog ? "ready" : operators.loaded && isConnected ? "warn" : undefined;
   const metrics = useMemo(
     () => ({
       internalMatch: dashboardTotals?.matchedNotionalUsd ?? latestMatch?.matchResult.matchedNotionalUsd ?? 0,
@@ -379,6 +404,27 @@ export default function HomePage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    refreshOperators()
+      .then((result) => {
+        if (!cancelled) {
+          setOperators(result);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error);
+          setChainOutput(JSON.stringify({ error: `Failed to read operators: ${message}` }, null, 2));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [publicClient]);
 
   async function connectWallet() {
     await runBusy("wallet", async () => {
@@ -505,7 +551,7 @@ export default function HomePage() {
 
   async function refreshAll() {
     await runBusy("refresh", async () => {
-      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents(), refreshOperators()]);
     });
   }
 
@@ -688,6 +734,13 @@ export default function HomePage() {
       if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
       await ensureMantleSepolia();
 
+      const currentOperators = await refreshOperators();
+      if (!isSameAddress(address, currentOperators.matchLog)) {
+        throw new Error(
+          `Connected wallet ${shortAddress(address)} is not the MatchLog operator (${shortAddress(currentOperators.matchLog ?? "")}).`
+        );
+      }
+
       const savingsBps = BigInt(Math.max(0, Math.round(latestMatch.costComparison.savedCostBps)));
       const matchId = await bytes32FromText(latestMatch.matchResult.matchId);
       const decisionId = await bytes32FromText(latestMatch.decision.decisionId);
@@ -818,6 +871,13 @@ export default function HomePage() {
       if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
       await ensureMantleSepolia();
 
+      const currentOperators = await refreshOperators();
+      if (!isSameAddress(address, currentOperators.intentBook)) {
+        throw new Error(
+          `Connected wallet ${shortAddress(address)} is not the IntentBook operator (${shortAddress(currentOperators.intentBook ?? "")}).`
+        );
+      }
+
       const targets = getFillSyncTargets(matchToSync);
       if (targets.length === 0) {
         setChainOutput(JSON.stringify({ status: "no_onchain_fill_targets" }, null, 2));
@@ -916,6 +976,34 @@ export default function HomePage() {
     setEvents(result.events);
   }
 
+  async function refreshOperators(): Promise<OperatorState> {
+    if (!publicClient) {
+      const empty = { loaded: false };
+      setOperators(empty);
+      return empty;
+    }
+
+    const [intentBookOperator, matchLogOperator] = await Promise.all([
+      publicClient.readContract({
+        address: CONTRACTS.intentBook,
+        abi: intentBookAbi,
+        functionName: "operator"
+      }),
+      publicClient.readContract({
+        address: CONTRACTS.matchLog,
+        abi: matchLogAbi,
+        functionName: "operator"
+      })
+    ]);
+    const next = {
+      intentBook: intentBookOperator as `0x${string}`,
+      matchLog: matchLogOperator as `0x${string}`,
+      loaded: true
+    };
+    setOperators(next);
+    return next;
+  }
+
   async function runBusy(label: string, task: () => Promise<void>) {
     setBusy(label);
     try {
@@ -955,6 +1043,8 @@ export default function HomePage() {
         <ContractLink label="IntentBook" address={CONTRACTS.intentBook} />
         <ContractLink label="MatchLog" address={CONTRACTS.matchLog} />
         <span className="rounded-full border border-line bg-[#171b1f] px-3 py-2 text-sm text-[#9ba7b1]">Chain ID 5003</span>
+        <StatusPill tone={intentBookOperatorTone}>IntentBook op {operators.intentBook ? shortAddress(operators.intentBook) : "loading"}</StatusPill>
+        <StatusPill tone={matchLogOperatorTone}>MatchLog op {operators.matchLog ? shortAddress(operators.matchLog) : "loading"}</StatusPill>
         <StatusPill>Intents {dashboardTotals?.intentCount ?? book.intents.length}</StatusPill>
         <StatusPill>Matches {dashboardTotals?.matchCount ?? 0}</StatusPill>
         <StatusPill>Decisions {dashboardTotals?.decisionCount ?? 0}</StatusPill>
@@ -1323,8 +1413,12 @@ function canCancelIntent(intent: HedgeIntent, address?: `0x${string}`) {
   return Boolean(
     address &&
       isActiveIntent(intent) &&
-      intent.user.toLowerCase() === address.toLowerCase()
+      isSameAddress(intent.user, address)
   );
+}
+
+function isSameAddress(left?: string | null, right?: string | null) {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 }
 
 function matchResponseFromPersisted(match?: PersistedMatch | null): MatchResponse | null {
