@@ -180,6 +180,38 @@ Response:
 }
 ```
 
+## GET /api/matches?asset=MNT
+
+Return persisted match history with allocation details and on-chain intent ids.
+The web console uses this endpoint through the dashboard path so a page reload
+does not lose the latest allocation context required for `Sync Fills`.
+
+Response:
+
+```json
+{
+  "matches": [
+    {
+      "matchId": "match_001",
+      "asset": "MNT",
+      "allocations": [
+        {
+          "shortIntentId": "intent_short",
+          "longIntentId": "intent_long",
+          "matchedUsd": 7000,
+          "shortOnchainIntentId": "0x...",
+          "longOnchainIntentId": "0x..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+## GET /api/matches/:matchId
+
+Return one persisted match with allocations and related decisions.
+
 ## POST /api/matching/run
 
 Run deterministic matching for an asset.

@@ -52,14 +52,41 @@ type IntentBook = {
 };
 
 type MatchAllocation = {
+  allocationId?: string;
+  matchId?: string;
   shortIntentId: string;
   longIntentId: string;
-  asset: string;
+  asset?: string | null;
   matchedUsd: number;
   shortUser?: string | null;
   longUser?: string | null;
   shortOnchainIntentId?: string | null;
   longOnchainIntentId?: string | null;
+};
+
+type PersistedMatch = {
+  matchId: string;
+  asset: string;
+  allocations: MatchAllocation[];
+  decisions?: Array<{
+    decisionId: string;
+    decisionType: string;
+    internalMatchUsd: number;
+    residualUsd: number;
+    reason: string;
+    risks: string[];
+    recommendedAction: string;
+    txHash?: string | null;
+  }>;
+  matchedNotionalUsd: number;
+  residualDirection: string;
+  residualNotionalUsd: number;
+  externalLiquidityAvoidedUsd: number;
+  naiveCostBps: number;
+  meshCostBps: number;
+  savedCostBps: number;
+  savedCostUsd: number;
+  createdAt: number;
 };
 
 type FillSyncTarget = {
@@ -126,11 +153,7 @@ type DashboardResponse = {
     avgSavedCostBps: number;
     savedCostUsd: number;
   };
-  latestMatch: {
-    matchId: string;
-    residualDirection: string;
-    residualNotionalUsd: number;
-  } | null;
+  latestMatch: PersistedMatch | null;
   latestDecision: {
     decisionId: string;
     decisionType: string;
@@ -472,6 +495,7 @@ export default function HomePage() {
   async function refreshDashboard() {
     const result = await api<DashboardResponse>(`/api/dashboard?asset=${draft.asset}`);
     setDashboard(result);
+    setLatestMatch((current) => current ?? matchResponseFromPersisted(result.latestMatch));
   }
 
   async function refreshBook() {
@@ -789,11 +813,12 @@ export default function HomePage() {
   async function syncIntentBookFills() {
     await runBusy("sync-fills", async () => {
       if (!address) throw new Error("Connect wallet first");
-      if (!latestMatch) throw new Error("Run matching first");
+      const matchToSync = latestMatch ?? matchResponseFromPersisted(dashboard?.latestMatch);
+      if (!matchToSync) throw new Error("Run matching first");
       if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
       await ensureMantleSepolia();
 
-      const targets = getFillSyncTargets(latestMatch);
+      const targets = getFillSyncTargets(matchToSync);
       if (targets.length === 0) {
         setChainOutput(JSON.stringify({ status: "no_onchain_fill_targets" }, null, 2));
         return;
@@ -841,7 +866,7 @@ export default function HomePage() {
           contractAddress: CONTRACTS.intentBook,
           txHash,
           blockNumber: blockNumberToNumber(receipt.blockNumber),
-          matchId: latestMatch.matchResult.matchId,
+          matchId: matchToSync.matchResult.matchId,
           intentId: target.dbIntentId,
           onchainId: matchedArgs?.intentId ?? target.onchainIntentId,
           payload: stringifyBigInts(matchedArgs ?? {
@@ -1023,7 +1048,7 @@ export default function HomePage() {
               Run Matching
             </ActionButton>
           </div>
-          <Output tall value={latestMatch ? JSON.stringify(latestMatch, null, 2) : "No match yet."} />
+          <Output tall value={matchOutput(latestMatch, dashboard?.latestMatch)} />
         </Panel>
 
         <Panel eyebrow="Step 4" title="On-chain Log">
@@ -1300,6 +1325,54 @@ function canCancelIntent(intent: HedgeIntent, address?: `0x${string}`) {
       isActiveIntent(intent) &&
       intent.user.toLowerCase() === address.toLowerCase()
   );
+}
+
+function matchResponseFromPersisted(match?: PersistedMatch | null): MatchResponse | null {
+  if (!match) return null;
+  const decision = match.decisions?.[0];
+  return {
+    matchResult: {
+      matchId: match.matchId,
+      asset: match.asset,
+      allocations: match.allocations ?? [],
+      matchedNotionalUsd: match.matchedNotionalUsd,
+      residualDirection: match.residualDirection,
+      residualNotionalUsd: match.residualNotionalUsd,
+      internalMatchRate:
+        match.matchedNotionalUsd + match.residualNotionalUsd === 0
+          ? 0
+          : match.matchedNotionalUsd / (match.matchedNotionalUsd + match.residualNotionalUsd)
+    },
+    costComparison: {
+      externalLiquidityAvoidedUsd: match.externalLiquidityAvoidedUsd,
+      naiveCostBps: match.naiveCostBps,
+      meshCostBps: match.meshCostBps,
+      savedCostBps: match.savedCostBps
+    },
+    decision: {
+      decisionId: decision?.decisionId ?? "",
+      decisionType: decision?.decisionType ?? "WAIT",
+      internalMatchUsd: decision?.internalMatchUsd ?? match.matchedNotionalUsd,
+      residualUsd: decision?.residualUsd ?? match.residualNotionalUsd,
+      reason: decision?.reason ?? "Restored from persisted match history.",
+      risks: decision?.risks ?? []
+    }
+  };
+}
+
+function matchOutput(latestMatch: MatchResponse | null, persistedMatch?: PersistedMatch | null) {
+  if (latestMatch) return JSON.stringify(latestMatch, null, 2);
+  if (persistedMatch) {
+    return JSON.stringify(
+      {
+        restoredFromDb: true,
+        latestMatch: persistedMatch
+      },
+      null,
+      2
+    );
+  }
+  return "No match yet.";
 }
 
 function getFillSyncTargets(match: MatchResponse): FillSyncTarget[] {

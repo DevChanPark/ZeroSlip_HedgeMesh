@@ -9,8 +9,10 @@ import {
   expireHedgeIntents,
   getDashboard,
   getDecision,
+  getMatch,
   listChainEvents,
   listIntents,
+  listMatches,
   parseIntentText,
   recordChainEvent,
   runMatching
@@ -94,6 +96,22 @@ export function createRequestHandler({ prisma, now = () => Date.now() }) {
           { now: now() }
         );
         return sendJson(res, 200, result);
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/matches") {
+        const result = await listMatches(prisma, {
+          asset: url.searchParams.get("asset"),
+          limit: url.searchParams.get("limit")
+        });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/api/matches/")) {
+        const matchId = decodeURIComponent(url.pathname.split("/").pop());
+        const match = await getMatch(prisma, matchId);
+        return match
+          ? sendJson(res, 200, match)
+          : sendJson(res, 404, { errors: ["match not found"] });
       }
 
       if (req.method === "POST" && url.pathname === "/api/matching/run") {

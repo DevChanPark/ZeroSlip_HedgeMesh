@@ -370,6 +370,28 @@ export async function listChainEvents(prisma, query = {}) {
   return { events: events.map(serializeChainEvent) };
 }
 
+export async function listMatches(prisma, query = {}) {
+  const asset = normalizeAsset(query.asset);
+  const limit = Math.max(1, Math.min(25, Number(query.limit ?? 10) || 10));
+  const matches = await prisma.hedgeMatch.findMany({
+    where: asset ? { asset } : {},
+    ...matchDetailInclude(),
+    orderBy: [{ createdAt: "desc" }],
+    take: limit
+  });
+
+  return { matches: matches.map(serializeMatch) };
+}
+
+export async function getMatch(prisma, matchId) {
+  if (!matchId) return null;
+  const match = await prisma.hedgeMatch.findUnique({
+    where: { id: matchId },
+    ...matchDetailInclude()
+  });
+  return match ? serializeMatch(match) : null;
+}
+
 export async function getDashboard(prisma, query = {}, options = {}) {
   const asset = normalizeAsset(query.asset);
   const now = options.now ?? Date.now();
@@ -427,7 +449,8 @@ export async function getDashboard(prisma, query = {}, options = {}) {
       }
     }),
     prisma.hedgeMatch.findFirst({
-      where: assetWhere,
+      where: successfulMatchWhere,
+      ...matchDetailInclude(),
       orderBy: [{ createdAt: "desc" }]
     }),
     prisma.agentDecision.findFirst({
@@ -573,6 +596,8 @@ function serializeMatch(match) {
   return {
     matchId: match.id,
     asset: match.asset,
+    allocations: Array.isArray(match.allocations) ? match.allocations.map(serializeAllocation) : [],
+    decisions: Array.isArray(match.decisions) ? match.decisions.map(serializeDecision) : [],
     matchedNotionalUsd: Number(match.matchedNotionalUsd),
     residualDirection: match.residualDirection,
     residualNotionalUsd: Number(match.residualNotionalUsd),
@@ -586,6 +611,22 @@ function serializeMatch(match) {
     onchainMatchId: match.onchainMatchId,
     logTxHash: match.logTxHash,
     createdAt: match.createdAt.getTime()
+  };
+}
+
+function serializeAllocation(allocation) {
+  return {
+    allocationId: allocation.id,
+    matchId: allocation.matchId,
+    shortIntentId: allocation.shortIntentId,
+    longIntentId: allocation.longIntentId,
+    asset: allocation.shortIntent?.asset ?? allocation.longIntent?.asset ?? null,
+    matchedUsd: Number(allocation.matchedUsd),
+    shortUser: allocation.shortIntent?.walletAddress ?? null,
+    longUser: allocation.longIntent?.walletAddress ?? null,
+    shortOnchainIntentId: allocation.shortIntent?.onchainIntentId ?? null,
+    longOnchainIntentId: allocation.longIntent?.onchainIntentId ?? null,
+    createdAt: allocation.createdAt.getTime()
   };
 }
 
@@ -674,6 +715,23 @@ function matchedIntentUpdateData(payload = {}) {
     if (status) data.status = status;
   }
   return data;
+}
+
+function matchDetailInclude() {
+  return {
+    include: {
+      allocations: {
+        include: {
+          shortIntent: true,
+          longIntent: true
+        },
+        orderBy: [{ createdAt: "asc" }]
+      },
+      decisions: {
+        orderBy: [{ createdAt: "desc" }]
+      }
+    }
+  };
 }
 
 function parsePayload(payloadJson) {

@@ -123,6 +123,16 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(match.body.matchResult.allocations[0].shortOnchainIntentId, "0xshort");
     assert.equal(match.body.matchResult.allocations[0].longOnchainIntentId, "0xlong");
 
+    const matches = await invokeJson(handler, "GET", "/api/matches?asset=MNT");
+    assert.equal(matches.status, 200);
+    assert.equal(matches.body.matches.length, 1);
+    assert.equal(matches.body.matches[0].matchId, "api_match_mnt");
+    assert.equal(matches.body.matches[0].allocations[0].shortOnchainIntentId, "0xshort");
+
+    const matchDetail = await invokeJson(handler, "GET", "/api/matches/api_match_mnt");
+    assert.equal(matchDetail.status, 200);
+    assert.equal(matchDetail.body.allocations[0].longOnchainIntentId, "0xlong");
+
     const persistedShort = await prisma.hedgeIntent.findUniqueOrThrow({
       where: { id: "api_short_mnt_10000" }
     });
