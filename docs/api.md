@@ -198,6 +198,15 @@ Response:
 {
   "matchResult": {
     "asset": "MNT",
+    "allocations": [
+      {
+        "shortIntentId": "intent_short",
+        "longIntentId": "intent_long",
+        "matchedUsd": 7000,
+        "shortOnchainIntentId": "0x...",
+        "longOnchainIntentId": "0x..."
+      }
+    ],
     "matchedNotionalUsd": 7000,
     "residualDirection": "SHORT",
     "residualNotionalUsd": 3000,
@@ -223,6 +232,10 @@ The API persists:
 - `MatchAllocation`
 - updated `HedgeIntent.filledNotionalUsd` and `HedgeIntent.status`
 - `AgentDecision`
+
+The web console uses allocation `onchainIntentId` values to call
+`IntentBook.markIntentMatched(bytes32,uint256)` and then records the resulting
+`HedgeIntentMatched` event through `/api/chain-events`.
 
 ## POST /api/cost/compare
 

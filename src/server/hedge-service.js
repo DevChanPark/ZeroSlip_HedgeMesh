@@ -173,6 +173,7 @@ export async function runMatching(prisma, input, options = {}) {
     ...matchIntents(dbIntents.map(toCoreIntent), { asset, now, matchId }),
     matchId
   };
+  matchResult.allocations = enrichAllocations(matchResult.allocations, dbIntents);
   const costComparison = compareCosts(matchResult);
   const decision = buildAgentDecision(
     {
@@ -336,6 +337,17 @@ export async function recordChainEvent(prisma, input, options = {}) {
       await prisma.hedgeIntent.updateMany({
         where,
         data: { status: "EXPIRED" }
+      });
+    }
+  }
+
+  if (input.eventName === "HedgeIntentMatched") {
+    const where = intentIdentityWhere(input);
+    const data = matchedIntentUpdateData(input.payload);
+    if (where && Object.keys(data).length > 0) {
+      await prisma.hedgeIntent.updateMany({
+        where,
+        data
       });
     }
   }
@@ -518,6 +530,21 @@ function toCoreIntent(intent) {
   };
 }
 
+function enrichAllocations(allocations, intents) {
+  const byId = new Map(intents.map((intent) => [intent.id, intent]));
+  return allocations.map((allocation) => {
+    const shortIntent = byId.get(allocation.shortIntentId);
+    const longIntent = byId.get(allocation.longIntentId);
+    return {
+      ...allocation,
+      shortUser: shortIntent?.walletAddress ?? null,
+      longUser: longIntent?.walletAddress ?? null,
+      shortOnchainIntentId: shortIntent?.onchainIntentId ?? null,
+      longOnchainIntentId: longIntent?.onchainIntentId ?? null
+    };
+  });
+}
+
 function serializeIntent(intent) {
   return {
     intentId: intent.id,
@@ -635,6 +662,18 @@ function intentIdentityWhere(input) {
   if (input.intentId) identity.push({ id: input.intentId });
   if (input.onchainId) identity.push({ onchainIntentId: input.onchainId });
   return identity.length > 0 ? { OR: identity } : null;
+}
+
+function matchedIntentUpdateData(payload = {}) {
+  const data = {};
+  if (payload.filledNotionalUsd !== undefined && payload.filledNotionalUsd !== null) {
+    data.filledNotionalUsd = Number(payload.filledNotionalUsd);
+  }
+  if (payload.status !== undefined && payload.status !== null) {
+    const status = ["OPEN", "PARTIALLY_MATCHED", "MATCHED", "CANCELLED", "EXPIRED"][Number(payload.status)];
+    if (status) data.status = status;
+  }
+  return data;
 }
 
 function parsePayload(payloadJson) {

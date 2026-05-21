@@ -84,7 +84,8 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
       notionalUsd: 10000,
       durationMinutes: 60,
       maxCostBps: 30,
-      urgency: "MEDIUM"
+      urgency: "MEDIUM",
+      onchainIntentId: "0xshort"
     });
     assert.equal(shortIntent.status, 201, JSON.stringify(shortIntent.body));
     assert.equal(shortIntent.body.status, "OPEN");
@@ -97,7 +98,8 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
       notionalUsd: 7000,
       durationMinutes: 60,
       maxCostBps: 30,
-      urgency: "MEDIUM"
+      urgency: "MEDIUM",
+      onchainIntentId: "0xlong"
     });
 
     const book = await invokeJson(handler, "GET", "/api/intents?asset=MNT");
@@ -118,6 +120,8 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(match.body.matchResult.residualDirection, "SHORT");
     assert.equal(match.body.costComparison.externalLiquidityAvoidedUsd, 14000);
     assert.equal(match.body.decision.decisionType, "MATCH");
+    assert.equal(match.body.matchResult.allocations[0].shortOnchainIntentId, "0xshort");
+    assert.equal(match.body.matchResult.allocations[0].longOnchainIntentId, "0xlong");
 
     const persistedShort = await prisma.hedgeIntent.findUniqueOrThrow({
       where: { id: "api_short_mnt_10000" }
@@ -170,6 +174,32 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(dashboard.body.latestMatch.matchId, "api_match_mnt");
     assert.equal(dashboard.body.latestDecision.decisionId, "api_decision_mnt");
     assert.equal(dashboard.body.recentEvents[0].eventName, "HedgeMatched");
+
+    const fillEvent = await invokeJson(handler, "POST", "/api/chain-events", {
+      network: "mantle-sepolia",
+      chainId: 5003,
+      contractName: "IntentBook",
+      contractAddress: "0x7489039281b77aab0ef24f56e333f28cfc352ee9",
+      eventName: "HedgeIntentMatched",
+      txHash: "0x0000000000000000000000000000000000000000000000000000000000000def",
+      blockNumber: 38900481,
+      intentId: "api_short_mnt_10000",
+      onchainId: "0xshort",
+      payload: {
+        intentId: "0xshort",
+        user: "0xA000000000000000000000000000000000000001",
+        matchedNotionalUsd: "7000",
+        filledNotionalUsd: "7000",
+        status: "1"
+      }
+    });
+    assert.equal(fillEvent.status, 201);
+
+    const syncedShort = await prisma.hedgeIntent.findUniqueOrThrow({
+      where: { id: "api_short_mnt_10000" }
+    });
+    assert.equal(Number(syncedShort.filledNotionalUsd), 7000);
+    assert.equal(syncedShort.status, "PARTIALLY_MATCHED");
 
     await invokeJson(handler, "POST", "/api/intents", {
       intentId: "api_cancel_meth",

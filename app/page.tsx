@@ -51,10 +51,30 @@ type IntentBook = {
   intents: HedgeIntent[];
 };
 
+type MatchAllocation = {
+  shortIntentId: string;
+  longIntentId: string;
+  asset: string;
+  matchedUsd: number;
+  shortUser?: string | null;
+  longUser?: string | null;
+  shortOnchainIntentId?: string | null;
+  longOnchainIntentId?: string | null;
+};
+
+type FillSyncTarget = {
+  dbIntentId: string;
+  onchainIntentId: `0x${string}`;
+  matchedUsd: number;
+  direction: Direction;
+  counterpartyIntentId: string;
+};
+
 type MatchResponse = {
   matchResult: {
     matchId: string;
     asset: string;
+    allocations: MatchAllocation[];
     matchedNotionalUsd: number;
     residualDirection: string;
     residualNotionalUsd: number;
@@ -156,6 +176,16 @@ const intentBookAbi = [
     outputs: []
   },
   {
+    type: "function",
+    name: "markIntentMatched",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "intentId", type: "bytes32" },
+      { name: "matchedNotionalUsd", type: "uint256" }
+    ],
+    outputs: []
+  },
+  {
     type: "event",
     name: "HedgeIntentSubmitted",
     inputs: [
@@ -184,6 +214,17 @@ const intentBookAbi = [
     inputs: [
       { indexed: true, name: "intentId", type: "bytes32" },
       { indexed: true, name: "user", type: "address" }
+    ]
+  },
+  {
+    type: "event",
+    name: "HedgeIntentMatched",
+    inputs: [
+      { indexed: true, name: "intentId", type: "bytes32" },
+      { indexed: true, name: "user", type: "address" },
+      { indexed: false, name: "matchedNotionalUsd", type: "uint256" },
+      { indexed: false, name: "filledNotionalUsd", type: "uint256" },
+      { indexed: false, name: "status", type: "uint8" }
     ]
   }
 ] as const;
@@ -745,6 +786,93 @@ export default function HomePage() {
     });
   }
 
+  async function syncIntentBookFills() {
+    await runBusy("sync-fills", async () => {
+      if (!address) throw new Error("Connect wallet first");
+      if (!latestMatch) throw new Error("Run matching first");
+      if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
+      await ensureMantleSepolia();
+
+      const targets = getFillSyncTargets(latestMatch);
+      if (targets.length === 0) {
+        setChainOutput(JSON.stringify({ status: "no_onchain_fill_targets" }, null, 2));
+        return;
+      }
+
+      const synced = [];
+      for (const target of targets) {
+        const data = encodeFunctionData({
+          abi: intentBookAbi,
+          functionName: "markIntentMatched",
+          args: [target.onchainIntentId, BigInt(Math.trunc(target.matchedUsd))]
+        });
+        const txHash = await sendTransactionAsync({
+          chainId: mantleSepolia.id,
+          to: CONTRACTS.intentBook,
+          data
+        });
+        setChainOutput(
+          JSON.stringify(
+            {
+              status: "waiting_for_intent_fill_receipt",
+              target,
+              txHash,
+              explorer: txLink(txHash)
+            },
+            null,
+            2
+          )
+        );
+
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+        if (receipt.status !== "success") {
+          throw new Error(`Intent fill sync reverted: ${txHash}`);
+        }
+        const matchedLog = parseEventLogs({
+          abi: intentBookAbi,
+          eventName: "HedgeIntentMatched",
+          logs: receipt.logs
+        })[0];
+        const matchedArgs = matchedLog?.args;
+
+        await recordChainEvent({
+          eventName: "HedgeIntentMatched",
+          contractName: "IntentBook",
+          contractAddress: CONTRACTS.intentBook,
+          txHash,
+          blockNumber: blockNumberToNumber(receipt.blockNumber),
+          matchId: latestMatch.matchResult.matchId,
+          intentId: target.dbIntentId,
+          onchainId: matchedArgs?.intentId ?? target.onchainIntentId,
+          payload: stringifyBigInts(matchedArgs ?? {
+            intentId: target.onchainIntentId,
+            matchedNotionalUsd: target.matchedUsd
+          })
+        });
+
+        synced.push({
+          ...target,
+          txHash,
+          blockNumber: blockNumberToNumber(receipt.blockNumber),
+          explorer: txLink(txHash),
+          event: stringifyBigInts(matchedArgs ?? null)
+        });
+      }
+
+      setChainOutput(
+        JSON.stringify(
+          {
+            status: "synced_intent_book_fills",
+            synced
+          },
+          null,
+          2
+        )
+      );
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
+    });
+  }
+
   async function recordChainEvent(input: Record<string, unknown>) {
     return api("/api/chain-events", {
       method: "POST",
@@ -899,7 +1027,10 @@ export default function HomePage() {
         </Panel>
 
         <Panel eyebrow="Step 4" title="On-chain Log">
-          <div className="mb-3 flex justify-end">
+          <div className="mb-3 flex flex-wrap justify-end gap-2">
+            <ActionButton busy={busy === "sync-fills"} icon={<Database size={17} />} onClick={syncIntentBookFills} variant="secondary">
+              Sync Fills
+            </ActionButton>
             <ActionButton busy={busy === "log"} icon={<ShieldCheck size={17} />} onClick={logDecision} variant="secondary">
               Log Decision
             </ActionButton>
@@ -1169,6 +1300,38 @@ function canCancelIntent(intent: HedgeIntent, address?: `0x${string}`) {
       isActiveIntent(intent) &&
       intent.user.toLowerCase() === address.toLowerCase()
   );
+}
+
+function getFillSyncTargets(match: MatchResponse): FillSyncTarget[] {
+  const targets: FillSyncTarget[] = [];
+  for (const allocation of match.matchResult.allocations ?? []) {
+    const shortOnchainIntentId = toHexString(allocation.shortOnchainIntentId);
+    if (shortOnchainIntentId) {
+      targets.push({
+        dbIntentId: allocation.shortIntentId,
+        onchainIntentId: shortOnchainIntentId,
+        matchedUsd: allocation.matchedUsd,
+        direction: "SHORT",
+        counterpartyIntentId: allocation.longIntentId
+      });
+    }
+
+    const longOnchainIntentId = toHexString(allocation.longOnchainIntentId);
+    if (longOnchainIntentId) {
+      targets.push({
+        dbIntentId: allocation.longIntentId,
+        onchainIntentId: longOnchainIntentId,
+        matchedUsd: allocation.matchedUsd,
+        direction: "LONG",
+        counterpartyIntentId: allocation.shortIntentId
+      });
+    }
+  }
+  return targets;
+}
+
+function toHexString(value?: string | null): `0x${string}` | null {
+  return value?.startsWith("0x") ? (value as `0x${string}`) : null;
 }
 
 function usd(value: number) {
