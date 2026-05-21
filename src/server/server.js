@@ -8,10 +8,11 @@ import { createRequestHandler } from "./app.js";
 
 const prisma = new PrismaClient();
 const port = Number(process.env.PORT || 3000);
+const host = process.env.HOST || "127.0.0.1";
 const server = createServer(createRequestHandler({ prisma }));
 
-server.listen(port, () => {
-  console.log(`ZeroSlip HedgeMesh API listening on http://127.0.0.1:${port}`);
+server.listen(port, host, () => {
+  console.log(`ZeroSlip HedgeMesh API listening on http://${host}:${port}`);
 });
 
 function shutdown() {
@@ -23,4 +24,3 @@ function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-
