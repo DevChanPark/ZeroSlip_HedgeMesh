@@ -280,6 +280,117 @@ export async function listChainEvents(prisma, query = {}) {
   return { events: events.map(serializeChainEvent) };
 }
 
+export async function getDashboard(prisma, query = {}, options = {}) {
+  const asset = normalizeAsset(query.asset);
+  const now = options.now ?? Date.now();
+  const intentBook = await listIntents(prisma, { asset });
+  const assetWhere = asset ? { asset } : {};
+  const successfulMatchWhere = { ...assetWhere, matchedNotionalUsd: { gt: 0 } };
+
+  const [
+    matchAggregate,
+    successfulMatchAggregate,
+    matchCount,
+    successfulMatchCount,
+    decisionCount,
+    chainEventCount,
+    activeIntentCount,
+    rejectedDecisionCount,
+    latestMatch,
+    latestDecision,
+    recentEvents
+  ] = await Promise.all([
+    prisma.hedgeMatch.aggregate({
+      where: assetWhere,
+      _sum: {
+        matchedNotionalUsd: true,
+        residualNotionalUsd: true,
+        naiveExternalVolumeUsd: true,
+        meshExternalVolumeUsd: true,
+        externalLiquidityAvoidedUsd: true,
+        savedCostUsd: true
+      },
+      _avg: {
+        savedCostBps: true
+      }
+    }),
+    prisma.hedgeMatch.aggregate({
+      where: successfulMatchWhere,
+      _avg: {
+        savedCostBps: true
+      }
+    }),
+    prisma.hedgeMatch.count({ where: assetWhere }),
+    prisma.hedgeMatch.count({ where: successfulMatchWhere }),
+    prisma.agentDecision.count({ where: assetWhere }),
+    prisma.chainEvent.count({ where: { network: query.network ?? "mantle-sepolia" } }),
+    prisma.hedgeIntent.count({
+      where: {
+        ...assetWhere,
+        status: { in: ACTIVE_STATUSES }
+      }
+    }),
+    prisma.agentDecision.count({
+      where: {
+        ...assetWhere,
+        decisionType: "REJECT"
+      }
+    }),
+    prisma.hedgeMatch.findFirst({
+      where: assetWhere,
+      orderBy: [{ createdAt: "desc" }]
+    }),
+    prisma.agentDecision.findFirst({
+      where: assetWhere,
+      orderBy: [{ createdAt: "desc" }]
+    }),
+    prisma.chainEvent.findMany({
+      where: { network: query.network ?? "mantle-sepolia" },
+      orderBy: [{ createdAt: "desc" }],
+      take: 5
+    })
+  ]);
+
+  const matchedNotionalUsd = decimalToNumber(matchAggregate._sum.matchedNotionalUsd);
+  const residualNotionalUsd = decimalToNumber(matchAggregate._sum.residualNotionalUsd);
+  const naiveExternalVolumeUsd = decimalToNumber(matchAggregate._sum.naiveExternalVolumeUsd);
+  const meshExternalVolumeUsd = decimalToNumber(matchAggregate._sum.meshExternalVolumeUsd);
+  const externalLiquidityAvoidedUsd = decimalToNumber(matchAggregate._sum.externalLiquidityAvoidedUsd);
+  const savedCostUsd = decimalToNumber(matchAggregate._sum.savedCostUsd);
+  const internalRateDenominator = matchedNotionalUsd + residualNotionalUsd;
+
+  return {
+    asset: asset ?? "ALL",
+    generatedAt: now,
+    intentBook,
+    totals: {
+      intentCount: intentBook.intents.length,
+      activeIntentCount,
+      matchCount,
+      successfulMatchCount,
+      decisionCount,
+      chainEventCount,
+      rejectedDecisionCount,
+      matchedNotionalUsd,
+      residualNotionalUsd,
+      residualDirection: getDashboardResidualDirection(
+        intentBook.shortDemandUsd,
+        intentBook.longDemandUsd
+      ),
+      internalMatchRate:
+        internalRateDenominator === 0 ? 0 : round(matchedNotionalUsd / internalRateDenominator, 4),
+      naiveExternalVolumeUsd,
+      meshExternalVolumeUsd,
+      externalLiquidityAvoidedUsd,
+      avgSavedCostBps: round(decimalToNumber(successfulMatchAggregate._avg.savedCostBps), 2),
+      savedCostUsd: round(savedCostUsd, 2)
+    },
+    latestMatch: latestMatch ? serializeMatch(latestMatch) : null,
+    latestDecision: latestDecision ? serializeDecision(latestDecision) : null,
+    recentEvents: recentEvents.map(serializeChainEvent)
+  };
+}
+
 export function buildCostComparison(input) {
   const required = [
     "asset",
@@ -351,6 +462,42 @@ function serializeIntent(intent) {
   };
 }
 
+function serializeMatch(match) {
+  return {
+    matchId: match.id,
+    asset: match.asset,
+    matchedNotionalUsd: Number(match.matchedNotionalUsd),
+    residualDirection: match.residualDirection,
+    residualNotionalUsd: Number(match.residualNotionalUsd),
+    naiveExternalVolumeUsd: Number(match.naiveExternalVolumeUsd),
+    meshExternalVolumeUsd: Number(match.meshExternalVolumeUsd),
+    externalLiquidityAvoidedUsd: Number(match.externalLiquidityAvoidedUsd),
+    naiveCostBps: Number(match.naiveCostBps),
+    meshCostBps: Number(match.meshCostBps),
+    savedCostBps: Number(match.savedCostBps),
+    savedCostUsd: Number(match.savedCostUsd),
+    onchainMatchId: match.onchainMatchId,
+    logTxHash: match.logTxHash,
+    createdAt: match.createdAt.getTime()
+  };
+}
+
+function serializeDecision(decision) {
+  return {
+    decisionId: decision.id,
+    matchId: decision.matchId,
+    decisionType: decision.decisionType,
+    asset: decision.asset,
+    internalMatchUsd: Number(decision.internalMatchUsd),
+    residualUsd: Number(decision.residualUsd),
+    reason: decision.reason,
+    risks: parsePayload(decision.risksJson),
+    recommendedAction: decision.recommendedAction,
+    txHash: decision.txHash,
+    createdAt: decision.createdAt.getTime()
+  };
+}
+
 function serializeChainEvent(event) {
   return {
     eventId: event.id,
@@ -385,6 +532,22 @@ function remainingDbNotionalUsd(intent) {
 
 function sum(values) {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function decimalToNumber(value) {
+  return value === null || value === undefined ? 0 : Number(value);
+}
+
+function round(value, decimals) {
+  const multiplier = 10 ** decimals;
+  return Math.round((Number(value) + Number.EPSILON) * multiplier) / multiplier;
+}
+
+function getDashboardResidualDirection(shortDemandUsd, longDemandUsd) {
+  if (shortDemandUsd > 0 && longDemandUsd > 0) return "MIXED";
+  if (shortDemandUsd > 0) return "SHORT";
+  if (longDemandUsd > 0) return "LONG";
+  return "NONE";
 }
 
 function parsePayload(payloadJson) {

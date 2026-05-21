@@ -134,6 +134,41 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(decision.status, 200);
     assert.equal(decision.body.decisionType, "MATCH");
     assert.equal(decision.body.matchId, "api_match_mnt");
+
+    const event = await invokeJson(handler, "POST", "/api/chain-events", {
+      network: "mantle-sepolia",
+      chainId: 5003,
+      contractName: "MatchLog",
+      contractAddress: "0xc02797d86f47ac6757383039b4bb5c2d9fe4e3cc",
+      eventName: "HedgeMatched",
+      txHash: "0x0000000000000000000000000000000000000000000000000000000000000abc",
+      blockNumber: 38900480,
+      matchId: "api_match_mnt",
+      onchainId: "0xmatch",
+      payload: {
+        asset: "MNT",
+        matchedNotionalUsd: "7000",
+        residualNotionalUsd: "3000",
+        estimatedSavingsBps: "19"
+      }
+    });
+    assert.equal(event.status, 201);
+
+    const dashboard = await invokeJson(handler, "GET", "/api/dashboard?asset=MNT");
+    assert.equal(dashboard.status, 200);
+    assert.equal(dashboard.body.totals.intentCount, 2);
+    assert.equal(dashboard.body.totals.activeIntentCount, 1);
+    assert.equal(dashboard.body.totals.matchCount, 1);
+    assert.equal(dashboard.body.totals.successfulMatchCount, 1);
+    assert.equal(dashboard.body.totals.decisionCount, 1);
+    assert.equal(dashboard.body.totals.chainEventCount, 1);
+    assert.equal(dashboard.body.totals.matchedNotionalUsd, 7000);
+    assert.equal(dashboard.body.totals.residualNotionalUsd, 3000);
+    assert.equal(dashboard.body.totals.internalMatchRate, 0.7);
+    assert.equal(dashboard.body.totals.externalLiquidityAvoidedUsd, 14000);
+    assert.equal(dashboard.body.latestMatch.matchId, "api_match_mnt");
+    assert.equal(dashboard.body.latestDecision.decisionId, "api_decision_mnt");
+    assert.equal(dashboard.body.recentEvents[0].eventName, "HedgeMatched");
   } finally {
     await prisma.$disconnect();
     rmSync(dbPath, { force: true });

@@ -5,6 +5,7 @@ import { URL } from "node:url";
 import {
   buildCostComparison,
   createHedgeIntent,
+  getDashboard,
   getDecision,
   listChainEvents,
   listIntents,
@@ -55,6 +56,18 @@ export function createRequestHandler({ prisma, now = () => Date.now() }) {
         const result = await listIntents(prisma, {
           asset: url.searchParams.get("asset")
         });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/dashboard") {
+        const result = await getDashboard(
+          prisma,
+          {
+            asset: url.searchParams.get("asset"),
+            network: url.searchParams.get("network")
+          },
+          { now: now() }
+        );
         return sendJson(res, 200, result);
       }
 

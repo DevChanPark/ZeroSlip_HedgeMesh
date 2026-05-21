@@ -82,6 +82,38 @@ type ChainEvent = {
   createdAt: number;
 };
 
+type DashboardResponse = {
+  totals: {
+    intentCount: number;
+    activeIntentCount: number;
+    matchCount: number;
+    successfulMatchCount: number;
+    decisionCount: number;
+    chainEventCount: number;
+    rejectedDecisionCount: number;
+    matchedNotionalUsd: number;
+    residualNotionalUsd: number;
+    residualDirection: string;
+    internalMatchRate: number;
+    naiveExternalVolumeUsd: number;
+    meshExternalVolumeUsd: number;
+    externalLiquidityAvoidedUsd: number;
+    avgSavedCostBps: number;
+    savedCostUsd: number;
+  };
+  latestMatch: {
+    matchId: string;
+    residualDirection: string;
+    residualNotionalUsd: number;
+  } | null;
+  latestDecision: {
+    decisionId: string;
+    decisionType: string;
+    txHash?: string | null;
+  } | null;
+  recentEvents: ChainEvent[];
+};
+
 const CONTRACTS = {
   intentBook: "0x7489039281b77aab0ef24f56e333f28cfc352ee9" as const,
   matchLog: "0xc02797d86f47ac6757383039b4bb5c2d9fe4e3cc" as const
@@ -198,6 +230,7 @@ export default function HomePage() {
   const [draft, setDraft] = useState<HedgeIntentDraft>(initialDraft);
   const [parsed, setParsed] = useState<ParsedIntent | null>(null);
   const [book, setBook] = useState<IntentBook>({ shortDemandUsd: 0, longDemandUsd: 0, intents: [] });
+  const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [latestMatch, setLatestMatch] = useState<MatchResponse | null>(null);
   const [events, setEvents] = useState<ChainEvent[]>([]);
   const [intentOutput, setIntentOutput] = useState("Ready.");
@@ -207,15 +240,22 @@ export default function HomePage() {
   const isConnecting = connectStatus === "pending";
   const networkLabel = chainId === mantleSepolia.id ? "Mantle Sepolia" : "Wrong network";
   const connectedLabel = isConnected && address ? shortAddress(address) : "No wallet";
+  const dashboardTotals = dashboard?.totals;
   const metrics = useMemo(
     () => ({
-      internalMatch: latestMatch?.matchResult.matchedNotionalUsd ?? 0,
-      residual: latestMatch?.matchResult.residualNotionalUsd ?? 0,
-      residualDirection: latestMatch?.matchResult.residualDirection ?? "NONE",
-      avoided: latestMatch?.costComparison.externalLiquidityAvoidedUsd ?? 0,
-      saved: latestMatch?.costComparison.savedCostBps ?? 0
+      internalMatch: dashboardTotals?.matchedNotionalUsd ?? latestMatch?.matchResult.matchedNotionalUsd ?? 0,
+      residual: dashboardTotals?.residualNotionalUsd ?? latestMatch?.matchResult.residualNotionalUsd ?? 0,
+      residualDirection:
+        dashboardTotals?.residualDirection ?? latestMatch?.matchResult.residualDirection ?? "NONE",
+      avoided:
+        dashboardTotals?.externalLiquidityAvoidedUsd ??
+        latestMatch?.costComparison.externalLiquidityAvoidedUsd ??
+        0,
+      saved: dashboardTotals?.avgSavedCostBps ?? latestMatch?.costComparison.savedCostBps ?? 0,
+      internalMatchRate:
+        dashboardTotals?.internalMatchRate ?? latestMatch?.matchResult.internalMatchRate ?? 0
     }),
-    [latestMatch]
+    [dashboardTotals, latestMatch]
   );
 
   useEffect(() => {
@@ -223,7 +263,7 @@ export default function HomePage() {
 
     async function loadInitial(attempt = 0) {
       try {
-        await Promise.all([refreshBook(), refreshEvents()]);
+        await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
       } catch (error) {
         if (cancelled) return;
         if (attempt < 3) {
@@ -349,14 +389,24 @@ export default function HomePage() {
           2
         )
       );
-      await refreshBook();
-      await refreshEvents();
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
     });
+  }
+
+  async function refreshDashboard() {
+    const result = await api<DashboardResponse>(`/api/dashboard?asset=${draft.asset}`);
+    setDashboard(result);
   }
 
   async function refreshBook() {
     const result = await api<IntentBook>(`/api/intents?asset=${draft.asset}`);
     setBook(result);
+  }
+
+  async function refreshAll() {
+    await runBusy("refresh", async () => {
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
+    });
   }
 
   async function runMatching() {
@@ -370,7 +420,7 @@ export default function HomePage() {
         }
       });
       setLatestMatch(result);
-      await refreshBook();
+      await Promise.all([refreshDashboard(), refreshBook()]);
     });
   }
 
@@ -499,7 +549,7 @@ export default function HomePage() {
           2
         )
       );
-      await refreshEvents();
+      await Promise.all([refreshDashboard(), refreshEvents()]);
     });
   }
 
@@ -560,13 +610,17 @@ export default function HomePage() {
         <ContractLink label="IntentBook" address={CONTRACTS.intentBook} />
         <ContractLink label="MatchLog" address={CONTRACTS.matchLog} />
         <span className="rounded-full border border-line bg-[#171b1f] px-3 py-2 text-sm text-[#9ba7b1]">Chain ID 5003</span>
+        <StatusPill>Intents {dashboardTotals?.intentCount ?? book.intents.length}</StatusPill>
+        <StatusPill>Matches {dashboardTotals?.matchCount ?? 0}</StatusPill>
+        <StatusPill>Decisions {dashboardTotals?.decisionCount ?? 0}</StatusPill>
+        <StatusPill>Logs {dashboardTotals?.chainEventCount ?? events.length}</StatusPill>
       </section>
 
       <section className="mb-4 grid gap-3 md:grid-cols-4">
-        <Metric label="Internal Match" value={usd(metrics.internalMatch)} />
+        <Metric label="Matched Notional" value={usd(metrics.internalMatch)} />
         <Metric label="Residual Hedge" value={`${usd(metrics.residual)} ${metrics.residualDirection}`} />
         <Metric label="Liquidity Avoided" value={usd(metrics.avoided)} />
-        <Metric label="Saved Cost" value={`${metrics.saved} bps`} />
+        <Metric label="Avg Saved Cost" value={`${metrics.saved} bps`} />
       </section>
 
       <section className="grid gap-4 lg:grid-cols-[1.08fr_0.92fr]">
@@ -600,7 +654,7 @@ export default function HomePage() {
 
         <Panel eyebrow="Step 2" title="Intent Book">
           <div className="mb-3 flex justify-end">
-            <ActionButton busy={busy === "refresh"} icon={<RefreshCw size={17} />} onClick={refreshBook} variant="secondary">
+            <ActionButton busy={busy === "refresh"} icon={<RefreshCw size={17} />} onClick={refreshAll} variant="secondary">
               Refresh
             </ActionButton>
           </div>

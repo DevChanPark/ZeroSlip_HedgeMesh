@@ -94,6 +94,39 @@ Return intent book summary.
 }
 ```
 
+## GET /api/dashboard?asset=MNT
+
+Return DB-backed KPI totals for the web console. The response is designed to
+survive page reloads because it is derived from persisted intents, matches,
+decisions, and chain events.
+
+Response:
+
+```json
+{
+  "asset": "MNT",
+  "totals": {
+    "intentCount": 2,
+    "activeIntentCount": 1,
+    "matchCount": 1,
+    "successfulMatchCount": 1,
+    "decisionCount": 1,
+    "chainEventCount": 3,
+    "matchedNotionalUsd": 7000,
+    "residualNotionalUsd": 3000,
+    "internalMatchRate": 0.7,
+    "naiveExternalVolumeUsd": 17000,
+    "meshExternalVolumeUsd": 3000,
+    "externalLiquidityAvoidedUsd": 14000,
+    "avgSavedCostBps": 19.4,
+    "savedCostUsd": 32.98
+  },
+  "latestMatch": {},
+  "latestDecision": {},
+  "recentEvents": []
+}
+```
+
 ## POST /api/matching/run
 
 Run deterministic matching for an asset.
