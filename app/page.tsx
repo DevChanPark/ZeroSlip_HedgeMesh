@@ -174,6 +174,7 @@ const CONTRACTS = {
 };
 
 const EXPLORER = "https://explorer.sepolia.mantle.xyz";
+const DEPLOYMENT_START_BLOCK = 38900476;
 
 const intentBookAbi = [
   {
@@ -958,6 +959,17 @@ export default function HomePage() {
     });
   }
 
+  async function syncChainEvents() {
+    await runBusy("sync-events", async () => {
+      const result = await api("/api/chain-events/sync", {
+        method: "POST",
+        body: { network: "mantle-sepolia", fromBlock: DEPLOYMENT_START_BLOCK }
+      });
+      setChainOutput(JSON.stringify(result, null, 2));
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
+    });
+  }
+
   async function recordChainEvent(input: Record<string, unknown>) {
     return api("/api/chain-events", {
       method: "POST",
@@ -1143,6 +1155,9 @@ export default function HomePage() {
 
         <Panel eyebrow="Step 4" title="On-chain Log">
           <div className="mb-3 flex flex-wrap justify-end gap-2">
+            <ActionButton busy={busy === "sync-events"} icon={<RefreshCw size={17} />} onClick={syncChainEvents} variant="secondary">
+              Sync Events
+            </ActionButton>
             <ActionButton busy={busy === "sync-fills"} icon={<Database size={17} />} onClick={syncIntentBookFills} variant="secondary">
               Sync Fills
             </ActionButton>

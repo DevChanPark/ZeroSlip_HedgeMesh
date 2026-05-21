@@ -336,3 +336,41 @@ Response:
   "matchId": "match_001"
 }
 ```
+
+## POST /api/chain-events/sync
+
+Read deployed Mantle Sepolia contract logs from RPC and reconcile them into the
+local `ChainEvent` table. This is the recovery path for events that happened
+on-chain but were not persisted because the browser was refreshed or an API
+request failed after the transaction was mined.
+
+Request:
+
+```json
+{
+  "network": "mantle-sepolia",
+  "contractName": "IntentBook",
+  "fromBlock": 38900476,
+  "toBlock": "latest"
+}
+```
+
+`contractName`, `fromBlock`, and `toBlock` are optional. If `fromBlock` is
+omitted, the API starts from the latest stored event with a small reorg buffer,
+or from the deployment block recorded in `deployments/mantle-sepolia.json`.
+
+Response:
+
+```json
+{
+  "network": "mantle-sepolia",
+  "fromBlock": 38900476,
+  "toBlock": 38901000,
+  "syncedCount": 3,
+  "duplicateCount": 1,
+  "events": []
+}
+```
+
+The sync is idempotent: repeating it over the same block range marks existing
+rows as duplicates instead of creating extra chain-event records.

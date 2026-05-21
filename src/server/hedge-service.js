@@ -282,29 +282,77 @@ export async function recordChainEvent(prisma, input, options = {}) {
   }
 
   const now = options.now ?? Date.now();
+  const payload =
+    typeof input.payloadJson === "string" ? parsePayload(input.payloadJson) : input.payload ?? {};
   const payloadJson =
     typeof input.payloadJson === "string"
       ? input.payloadJson
-      : JSON.stringify(input.payload ?? {});
+      : JSON.stringify(payload);
 
-  const event = await prisma.chainEvent.create({
-    data: {
-      id: input.id ?? `chain_event_${randomUUID()}`,
-      network: input.network,
-      chainId: Number(input.chainId),
-      contractName: input.contractName,
-      contractAddress: input.contractAddress,
-      eventName: input.eventName,
-      txHash: input.txHash,
-      blockNumber:
-        input.blockNumber === undefined || input.blockNumber === null
-          ? null
-          : Number(input.blockNumber),
-      payloadJson,
-      createdAt: new Date(now)
-    }
+  const blockNumber =
+    input.blockNumber === undefined || input.blockNumber === null
+      ? null
+      : Number(input.blockNumber);
+  const existing = await findExistingChainEvent(prisma, {
+    id: input.id,
+    network: input.network,
+    contractName: input.contractName,
+    eventName: input.eventName,
+    txHash: input.txHash,
+    blockNumber
+  });
+  const duplicate = Boolean(existing);
+  const event =
+    existing ??
+    (await prisma.chainEvent.create({
+      data: {
+        id: input.id ?? `chain_event_${randomUUID()}`,
+        network: input.network,
+        chainId: Number(input.chainId),
+        contractName: input.contractName,
+        contractAddress: input.contractAddress,
+        eventName: input.eventName,
+        txHash: input.txHash,
+        blockNumber,
+        payloadJson,
+        createdAt: new Date(now)
+      }
+    }));
+
+  await applyChainEventEffects(prisma, {
+    ...input,
+    payload,
+    blockNumber
   });
 
+  return {
+    ok: true,
+    status: duplicate ? 200 : 201,
+    event: {
+      ...serializeChainEvent(event),
+      duplicate
+    }
+  };
+}
+
+async function findExistingChainEvent(prisma, input) {
+  if (input.id) {
+    const existingById = await prisma.chainEvent.findUnique({ where: { id: input.id } });
+    if (existingById) return existingById;
+  }
+
+  return prisma.chainEvent.findFirst({
+    where: {
+      network: input.network,
+      contractName: input.contractName,
+      eventName: input.eventName,
+      txHash: input.txHash,
+      blockNumber: input.blockNumber
+    }
+  });
+}
+
+async function applyChainEventEffects(prisma, input) {
   if (input.eventName === "HedgeMatched" && input.matchId) {
     const data = { logTxHash: input.txHash };
     if (input.onchainId) data.onchainMatchId = input.onchainId;
@@ -351,8 +399,6 @@ export async function recordChainEvent(prisma, input, options = {}) {
       });
     }
   }
-
-  return { ok: true, status: 201, event: serializeChainEvent(event) };
 }
 
 export async function listChainEvents(prisma, query = {}) {

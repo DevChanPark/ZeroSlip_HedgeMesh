@@ -9,6 +9,7 @@ import test from "node:test";
 import { PrismaClient } from "@prisma/client";
 
 import { createRequestHandler } from "../src/server/app.js";
+import { syncMantleSepoliaEvents } from "../src/server/chain-sync.js";
 
 const NOW = Date.parse("2026-05-20T00:00:00.000Z");
 
@@ -73,7 +74,24 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
       }
     }
   });
-  const handler = createRequestHandler({ prisma, now: () => NOW });
+  const syncCalls = [];
+  const handler = createRequestHandler({
+    prisma,
+    now: () => NOW,
+    syncChainEvents: async (_prisma, body, options) => {
+      syncCalls.push({ body, options });
+      return {
+        ok: true,
+        status: 200,
+        network: body.network ?? "mantle-sepolia",
+        fromBlock: Number(body.fromBlock ?? 0),
+        toBlock: Number(body.toBlock ?? 0),
+        syncedCount: 1,
+        duplicateCount: 0,
+        events: []
+      };
+    }
+  });
 
   try {
     const shortIntent = await invokeJson(handler, "POST", "/api/intents", {
@@ -149,7 +167,7 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(decision.body.decisionType, "MATCH");
     assert.equal(decision.body.matchId, "api_match_mnt");
 
-    const event = await invokeJson(handler, "POST", "/api/chain-events", {
+    const hedgeMatchedEventBody = {
       network: "mantle-sepolia",
       chainId: 5003,
       contractName: "MatchLog",
@@ -165,8 +183,13 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
         residualNotionalUsd: "3000",
         estimatedSavingsBps: "19"
       }
-    });
+    };
+    const event = await invokeJson(handler, "POST", "/api/chain-events", hedgeMatchedEventBody);
     assert.equal(event.status, 201);
+
+    const duplicateEvent = await invokeJson(handler, "POST", "/api/chain-events", hedgeMatchedEventBody);
+    assert.equal(duplicateEvent.status, 200);
+    assert.equal(duplicateEvent.body.duplicate, true);
 
     const dashboard = await invokeJson(handler, "GET", "/api/dashboard?asset=MNT");
     assert.equal(dashboard.status, 200);
@@ -184,6 +207,53 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(dashboard.body.latestMatch.matchId, "api_match_mnt");
     assert.equal(dashboard.body.latestDecision.decisionId, "api_decision_mnt");
     assert.equal(dashboard.body.recentEvents[0].eventName, "HedgeMatched");
+
+    const sync = await invokeJson(handler, "POST", "/api/chain-events/sync", {
+      network: "mantle-sepolia",
+      fromBlock: 38900476,
+      toBlock: 38900481
+    });
+    assert.equal(sync.status, 200);
+    assert.equal(sync.body.syncedCount, 1);
+    assert.equal(syncCalls.length, 1);
+    assert.equal(syncCalls[0].body.fromBlock, 38900476);
+    assert.equal(syncCalls[0].options.now, NOW);
+
+    const rpcSync = await syncMantleSepoliaEvents(
+      prisma,
+      {
+        network: "mantle-sepolia",
+        contractName: "IntentBook",
+        fromBlock: 38900481,
+        toBlock: 38900481
+      },
+      {
+        now: NOW,
+        client: {
+          getLogs: async ({ event }) =>
+            event.name === "HedgeIntentMatched"
+              ? [
+                  {
+                    transactionHash:
+                      "0x0000000000000000000000000000000000000000000000000000000000000123",
+                    blockNumber: 38900481n,
+                    logIndex: 0,
+                    args: {
+                      intentId: "0xshort",
+                      user: "0xA000000000000000000000000000000000000001",
+                      matchedNotionalUsd: 7000n,
+                      filledNotionalUsd: 7000n,
+                      status: 1n
+                    }
+                  }
+                ]
+              : []
+        }
+      }
+    );
+    assert.equal(rpcSync.status, 200);
+    assert.equal(rpcSync.syncedCount, 1);
+    assert.equal(rpcSync.events[0].eventName, "HedgeIntentMatched");
 
     const fillEvent = await invokeJson(handler, "POST", "/api/chain-events", {
       network: "mantle-sepolia",

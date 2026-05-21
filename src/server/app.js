@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 
+import { syncMantleSepoliaEvents } from "./chain-sync.js";
 import {
   buildCostComparison,
   cancelHedgeIntent,
@@ -20,7 +21,11 @@ import {
 
 const PUBLIC_DIR = path.resolve(process.cwd(), "public");
 
-export function createRequestHandler({ prisma, now = () => Date.now() }) {
+export function createRequestHandler({
+  prisma,
+  now = () => Date.now(),
+  syncChainEvents = syncMantleSepoliaEvents
+}) {
   return async function handleRequest(req, res) {
     try {
       const url = new URL(req.url, "http://localhost");
@@ -152,6 +157,12 @@ export function createRequestHandler({ prisma, now = () => Date.now() }) {
         const body = await readJson(req);
         const result = await recordChainEvent(prisma, body, { now: now() });
         return sendJson(res, result.status, result.ok ? result.event : { errors: result.errors });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chain-events/sync") {
+        const body = await readJson(req);
+        const result = await syncChainEvents(prisma, body, { now: now() });
+        return sendJson(res, result.status, result.ok ? result : { errors: result.errors });
       }
 
       if (req.method === "GET" && url.pathname === "/api/chain-events") {
