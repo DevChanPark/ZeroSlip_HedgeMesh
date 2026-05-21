@@ -208,6 +208,78 @@ export async function getDecision(prisma, decisionId) {
   };
 }
 
+export async function recordChainEvent(prisma, input, options = {}) {
+  const required = [
+    "network",
+    "chainId",
+    "contractName",
+    "contractAddress",
+    "eventName",
+    "txHash"
+  ];
+  const missing = required.filter((field) => !input[field]);
+  if (missing.length > 0) {
+    return { ok: false, status: 400, errors: missing.map((field) => `${field} is required`) };
+  }
+
+  const now = options.now ?? Date.now();
+  const payloadJson =
+    typeof input.payloadJson === "string"
+      ? input.payloadJson
+      : JSON.stringify(input.payload ?? {});
+
+  const event = await prisma.chainEvent.create({
+    data: {
+      id: input.id ?? `chain_event_${randomUUID()}`,
+      network: input.network,
+      chainId: Number(input.chainId),
+      contractName: input.contractName,
+      contractAddress: input.contractAddress,
+      eventName: input.eventName,
+      txHash: input.txHash,
+      blockNumber:
+        input.blockNumber === undefined || input.blockNumber === null
+          ? null
+          : Number(input.blockNumber),
+      payloadJson,
+      createdAt: new Date(now)
+    }
+  });
+
+  if (input.eventName === "HedgeMatched" && input.matchId) {
+    const data = { logTxHash: input.txHash };
+    if (input.onchainId) data.onchainMatchId = input.onchainId;
+    await prisma.hedgeMatch.updateMany({
+      where: { id: input.matchId },
+      data
+    });
+  }
+
+  if (input.eventName === "AgentDecisionLogged" && input.decisionId) {
+    await prisma.agentDecision.updateMany({
+      where: { id: input.decisionId },
+      data: { txHash: input.txHash }
+    });
+  }
+
+  return { ok: true, status: 201, event: serializeChainEvent(event) };
+}
+
+export async function listChainEvents(prisma, query = {}) {
+  const limit = Math.max(1, Math.min(50, Number(query.limit ?? 20) || 20));
+  const where = {};
+  if (query.network) where.network = query.network;
+  if (query.contractName) where.contractName = query.contractName;
+
+  const events = await prisma.chainEvent.findMany({
+    where,
+    orderBy: [{ createdAt: "desc" }],
+    take: limit
+  });
+
+  return { events: events.map(serializeChainEvent) };
+}
+
 export function buildCostComparison(input) {
   const required = [
     "asset",
@@ -279,6 +351,21 @@ function serializeIntent(intent) {
   };
 }
 
+function serializeChainEvent(event) {
+  return {
+    eventId: event.id,
+    network: event.network,
+    chainId: event.chainId,
+    contractName: event.contractName,
+    contractAddress: event.contractAddress,
+    eventName: event.eventName,
+    txHash: event.txHash,
+    blockNumber: event.blockNumber,
+    payload: parsePayload(event.payloadJson),
+    createdAt: event.createdAt.getTime()
+  };
+}
+
 async function applyFill(tx, intentId, matchedUsd) {
   const intent = await tx.hedgeIntent.findUniqueOrThrow({ where: { id: intentId } });
   const nextFilled = Number(intent.filledNotionalUsd) + matchedUsd;
@@ -300,3 +387,10 @@ function sum(values) {
   return values.reduce((total, value) => total + value, 0);
 }
 
+function parsePayload(payloadJson) {
+  try {
+    return JSON.parse(payloadJson);
+  } catch {
+    return {};
+  }
+}

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZeroSlip HedgeMesh</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Mantle Sepolia</p>
+          <h1>ZeroSlip HedgeMesh</h1>
+        </div>
+        <div class="wallet-bar">
+          <span id="networkStatus" class="status-pill muted">Wallet offline</span>
+          <span id="walletAddress" class="address-pill">No wallet</span>
+          <button id="connectWallet" class="primary-action" type="button">Connect</button>
+        </div>
+      </header>
+
+      <section class="contract-strip" aria-label="Deployed contracts">
+        <a id="intentBookLink" target="_blank" rel="noreferrer">IntentBook</a>
+        <a id="matchLogLink" target="_blank" rel="noreferrer">MatchLog</a>
+        <span>Chain ID 5003</span>
+      </section>
+
+      <section class="metric-grid" aria-label="HedgeMesh metrics">
+        <article class="metric">
+          <span>Internal Match</span>
+          <strong id="metricInternalMatch">$0</strong>
+        </article>
+        <article class="metric">
+          <span>Residual Hedge</span>
+          <strong id="metricResidual">$0</strong>
+        </article>
+        <article class="metric">
+          <span>Liquidity Avoided</span>
+          <strong id="metricAvoided">$0</strong>
+        </article>
+        <article class="metric">
+          <span>Saved Cost</span>
+          <strong id="metricSaved">0 bps</strong>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <section class="panel intent-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Step 1</p>
+              <h2>Submit Hedge Intent</h2>
+            </div>
+            <button id="parseIntent" class="secondary-action" type="button">AI Parse</button>
+          </div>
+
+          <label class="field full">
+            <span>Natural language</span>
+            <textarea id="naturalLanguage" rows="4">I want to hedge $1,000 of MNT downside risk for 1 hour. Keep cost under 10 bps.</textarea>
+          </label>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>Asset</span>
+              <select id="asset">
+                <option>MNT</option>
+                <option>mETH</option>
+                <option>USDC</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Direction</span>
+              <select id="direction">
+                <option>SHORT</option>
+                <option>LONG</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Notional USD</span>
+              <input id="notionalUsd" min="1" step="1" type="number" value="1000" />
+            </label>
+            <label class="field">
+              <span>Duration minutes</span>
+              <input id="durationMinutes" min="1" step="1" type="number" value="60" />
+            </label>
+            <label class="field">
+              <span>Max cost bps</span>
+              <input id="maxCostBps" min="0" step="1" type="number" value="10" />
+            </label>
+            <label class="field">
+              <span>Urgency</span>
+              <select id="urgency">
+                <option>LOW</option>
+                <option selected>MEDIUM</option>
+                <option>HIGH</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="action-row">
+            <button id="submitIntent" class="primary-action wide" type="button">Submit to Mantle + DB</button>
+          </div>
+          <pre id="intentOutput" class="output-box">Ready.</pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Step 2</p>
+              <h2>Intent Book</h2>
+            </div>
+            <button id="refreshBook" class="secondary-action" type="button">Refresh</button>
+          </div>
+          <div class="book-demand">
+            <div>
+              <span>SHORT demand</span>
+              <strong id="shortDemand">$0</strong>
+            </div>
+            <div>
+              <span>LONG demand</span>
+              <strong id="longDemand">$0</strong>
+            </div>
+          </div>
+          <div id="intentList" class="intent-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Step 3</p>
+              <h2>Matching Result</h2>
+            </div>
+            <button id="runMatching" class="primary-action" type="button">Run Matching</button>
+          </div>
+          <pre id="matchingOutput" class="output-box tall">No match yet.</pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Step 4</p>
+              <h2>On-chain Log</h2>
+            </div>
+            <button id="logDecision" class="secondary-action" type="button">Log Decision</button>
+          </div>
+          <div id="chainEvents" class="event-list"></div>
+          <pre id="chainOutput" class="output-box">No chain log yet.</pre>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

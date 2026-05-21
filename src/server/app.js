@@ -1,18 +1,40 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { URL } from "node:url";
 
 import {
   buildCostComparison,
   createHedgeIntent,
   getDecision,
+  listChainEvents,
   listIntents,
   parseIntentText,
+  recordChainEvent,
   runMatching
 } from "./hedge-service.js";
+
+const PUBLIC_DIR = path.resolve(process.cwd(), "public");
 
 export function createRequestHandler({ prisma, now = () => Date.now() }) {
   return async function handleRequest(req, res) {
     try {
       const url = new URL(req.url, "http://localhost");
+
+      if (req.method === "OPTIONS") {
+        return sendEmpty(res, 204);
+      }
+
+      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+        return sendStatic(res, path.join(PUBLIC_DIR, "index.html"));
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/assets/")) {
+        const assetPath = decodeURIComponent(url.pathname.slice("/assets/".length));
+        if (assetPath.includes("..") || path.isAbsolute(assetPath)) {
+          return sendJson(res, 400, { errors: ["invalid asset path"] });
+        }
+        return sendStatic(res, path.join(PUBLIC_DIR, "assets", assetPath));
+      }
 
       if (req.method === "GET" && url.pathname === "/health") {
         return sendJson(res, 200, { ok: true });
@@ -70,12 +92,43 @@ export function createRequestHandler({ prisma, now = () => Date.now() }) {
           : sendJson(res, 404, { errors: ["decision not found"] });
       }
 
+      if (req.method === "POST" && url.pathname === "/api/chain-events") {
+        const body = await readJson(req);
+        const result = await recordChainEvent(prisma, body, { now: now() });
+        return sendJson(res, result.status, result.ok ? result.event : { errors: result.errors });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/chain-events") {
+        const result = await listChainEvents(prisma, {
+          network: url.searchParams.get("network"),
+          contractName: url.searchParams.get("contractName"),
+          limit: url.searchParams.get("limit")
+        });
+        return sendJson(res, 200, result);
+      }
+
       return sendJson(res, 404, { errors: ["route not found"] });
     } catch (error) {
       const status = error.statusCode ?? 500;
       return sendJson(res, status, { errors: [error.message] });
     }
   };
+}
+
+async function sendStatic(res, filePath) {
+  try {
+    const body = await readFile(filePath);
+    res.writeHead(200, {
+      "content-type": contentType(filePath),
+      "content-length": body.byteLength
+    });
+    res.end(body);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return sendJson(res, 404, { errors: ["asset not found"] });
+    }
+    throw error;
+  }
 }
 
 async function readJson(req) {
@@ -103,3 +156,21 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+function sendEmpty(res, status) {
+  res.writeHead(status, {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type"
+  });
+  res.end();
+}
+
+function contentType(filePath) {
+  const extension = path.extname(filePath);
+  if (extension === ".html") return "text/html; charset=utf-8";
+  if (extension === ".css") return "text/css; charset=utf-8";
+  if (extension === ".js") return "text/javascript; charset=utf-8";
+  if (extension === ".json") return "application/json; charset=utf-8";
+  if (extension === ".svg") return "image/svg+xml";
+  return "application/octet-stream";
+}
