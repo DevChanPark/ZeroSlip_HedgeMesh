@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 
-import { reconcileMantleSepoliaIntents } from "./chain-state.js";
+import { reconcileMantleSepoliaIntents, repairMantleSepoliaIntents } from "./chain-state.js";
 import { syncMantleSepoliaEvents } from "./chain-sync.js";
 import {
   buildCostComparison,
@@ -26,6 +26,7 @@ export function createRequestHandler({
   prisma,
   now = () => Date.now(),
   reconcileIntents = reconcileMantleSepoliaIntents,
+  repairIntents = repairMantleSepoliaIntents,
   syncChainEvents = syncMantleSepoliaEvents
 }) {
   return async function handleRequest(req, res) {
@@ -85,6 +86,12 @@ export function createRequestHandler({
       if (req.method === "POST" && url.pathname === "/api/intents/reconcile") {
         const body = await readJson(req);
         const result = await reconcileIntents(prisma, body, { now: now() });
+        return sendJson(res, result.status, result.ok ? result : { errors: result.errors });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/intents/reconcile/apply") {
+        const body = await readJson(req);
+        const result = await repairIntents(prisma, body, { now: now() });
         return sendJson(res, result.status, result.ok ? result : { errors: result.errors });
       }
 

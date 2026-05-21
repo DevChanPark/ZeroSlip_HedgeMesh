@@ -194,6 +194,46 @@ urgency, filled amount, and status. Block timestamps are returned for context
 but are not treated as hard mismatches because DB creation time is recorded
 after the transaction receipt.
 
+## POST /api/intents/reconcile/apply
+
+Apply an operational DB cleanup based on the reconciliation result. This never
+sends an on-chain transaction; it only updates local DB rows so the backend does
+not keep matching stale local/demo state.
+
+Request:
+
+```json
+{
+  "network": "mantle-sepolia",
+  "asset": "MNT",
+  "action": "ARCHIVE_LOCAL_ONLY"
+}
+```
+
+Supported actions:
+
+- `ARCHIVE_LOCAL_ONLY`: set intents with no `onchainIntentId` to `LOCAL_ONLY`
+  so they are excluded from matching.
+- `APPLY_CHAIN_STATE`: copy on-chain `status`, `filledNotionalUsd`, and
+  `expiresAt` into DB rows that have an on-chain intent id.
+- `APPLY_ALL`: run both of the above.
+
+Response:
+
+```json
+{
+  "action": "ARCHIVE_LOCAL_ONLY",
+  "updatedCount": 2,
+  "updates": [],
+  "reconciliation": {
+    "summary": {
+      "mismatched": 0,
+      "localOnly": 2
+    }
+  }
+}
+```
+
 ## GET /api/dashboard?asset=MNT
 
 Return DB-backed KPI totals for the web console. The response is designed to

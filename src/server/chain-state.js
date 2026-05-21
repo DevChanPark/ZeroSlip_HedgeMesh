@@ -2,6 +2,7 @@ import { createPublicClient, http } from "viem";
 
 import { loadDeployments } from "./chain-sync.js";
 
+const LOCAL_ONLY_STATUS = "LOCAL_ONLY";
 const NETWORK = {
   name: "mantle-sepolia",
   chainId: 5003,
@@ -113,6 +114,83 @@ export async function reconcileMantleSepoliaIntents(prisma, input = {}, options 
   };
 }
 
+export async function repairMantleSepoliaIntents(prisma, input = {}, options = {}) {
+  const action = input.action;
+  if (!["APPLY_CHAIN_STATE", "ARCHIVE_LOCAL_ONLY", "APPLY_ALL"].includes(action)) {
+    return {
+      ok: false,
+      status: 400,
+      errors: ["action must be APPLY_CHAIN_STATE, ARCHIVE_LOCAL_ONLY, or APPLY_ALL"]
+    };
+  }
+
+  const before = await reconcileMantleSepoliaIntents(prisma, input, options);
+  if (!before.ok) return before;
+
+  const updates = [];
+  if (action === "ARCHIVE_LOCAL_ONLY" || action === "APPLY_ALL") {
+    for (const row of before.intents) {
+      if (!row.onchainIntentId && row.db.status !== LOCAL_ONLY_STATUS) {
+        const updated = await prisma.hedgeIntent.update({
+          where: { id: row.intentId },
+          data: { status: LOCAL_ONLY_STATUS }
+        });
+        updates.push({
+          intentId: row.intentId,
+          action: "ARCHIVE_LOCAL_ONLY",
+          before: row.db.status,
+          after: updated.status
+        });
+      }
+    }
+  }
+
+  if (action === "APPLY_CHAIN_STATE" || action === "APPLY_ALL") {
+    for (const row of before.intents) {
+      if (!row.chain.exists) continue;
+
+      const data = {};
+      if (row.db.status !== row.chain.status) data.status = row.chain.status;
+      if (row.db.filledNotionalUsd !== row.chain.filledNotionalUsd) {
+        data.filledNotionalUsd = row.chain.filledNotionalUsd;
+      }
+      if (row.chain.expiresAt) {
+        data.expiresAt = new Date(row.chain.expiresAt);
+      }
+
+      if (Object.keys(data).length > 0) {
+        await prisma.hedgeIntent.update({
+          where: { id: row.intentId },
+          data
+        });
+        updates.push({
+          intentId: row.intentId,
+          action: "APPLY_CHAIN_STATE",
+          before: {
+            status: row.db.status,
+            filledNotionalUsd: row.db.filledNotionalUsd
+          },
+          after: {
+            status: data.status ?? row.db.status,
+            filledNotionalUsd: data.filledNotionalUsd ?? row.db.filledNotionalUsd
+          }
+        });
+      }
+    }
+  }
+
+  const reconciliation = await reconcileMantleSepoliaIntents(prisma, input, options);
+  return {
+    ok: true,
+    status: 200,
+    network: before.network,
+    action,
+    updatedCount: updates.length,
+    updates,
+    reconciliation: reconciliation.ok ? reconciliation : before
+  };
+}
+
 async function reconcileIntent(client, intentBook, intent) {
   const db = serializeDbIntent(intent);
   const row = {
@@ -129,11 +207,13 @@ async function reconcileIntent(client, intentBook, intent) {
   };
 
   if (!intent.onchainIntentId) {
-    row.differences.push({
-      field: "onchainIntentId",
-      db: null,
-      chain: "missing"
-    });
+    if (intent.status !== LOCAL_ONLY_STATUS) {
+      row.differences.push({
+        field: "onchainIntentId",
+        db: null,
+        chain: "missing"
+      });
+    }
     return row;
   }
 

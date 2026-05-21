@@ -174,6 +174,18 @@ type IntentReconciliation = {
   }>;
 };
 
+type IntentRepairResponse = {
+  action: "APPLY_CHAIN_STATE" | "ARCHIVE_LOCAL_ONLY" | "APPLY_ALL";
+  updatedCount: number;
+  updates: Array<{
+    intentId: string;
+    action: string;
+    before: unknown;
+    after: unknown;
+  }>;
+  reconciliation: IntentReconciliation;
+};
+
 type DashboardResponse = {
   totals: {
     intentCount: number;
@@ -1028,6 +1040,30 @@ export default function HomePage() {
     });
   }
 
+  async function applyIntentRepair(action: IntentRepairResponse["action"]) {
+    await runBusy(`repair:${action}`, async () => {
+      const result = await api<IntentRepairResponse>("/api/intents/reconcile/apply", {
+        method: "POST",
+        body: { network: "mantle-sepolia", asset: draft.asset, action }
+      });
+      setReconciliation(result.reconciliation);
+      setChainOutput(
+        JSON.stringify(
+          {
+            status: "applied_intent_repair",
+            action: result.action,
+            updatedCount: result.updatedCount,
+            updates: result.updates,
+            summary: result.reconciliation.summary
+          },
+          null,
+          2
+        )
+      );
+      await Promise.all([refreshDashboard(), refreshBook()]);
+    });
+  }
+
   async function recordChainEvent(input: Record<string, unknown>) {
     return api("/api/chain-events", {
       method: "POST",
@@ -1243,6 +1279,12 @@ export default function HomePage() {
 
         <Panel eyebrow="Step 5" title="DB / Chain State">
           <div className="mb-3 flex flex-wrap justify-end gap-2">
+            <ActionButton busy={busy === "repair:ARCHIVE_LOCAL_ONLY"} icon={<Database size={17} />} onClick={() => applyIntentRepair("ARCHIVE_LOCAL_ONLY")} variant="secondary">
+              Archive Local
+            </ActionButton>
+            <ActionButton busy={busy === "repair:APPLY_CHAIN_STATE"} icon={<RefreshCw size={17} />} onClick={() => applyIntentRepair("APPLY_CHAIN_STATE")} variant="secondary">
+              Apply Chain
+            </ActionButton>
             <ActionButton busy={busy === "reconcile-intents"} icon={<ShieldCheck size={17} />} onClick={reconcileIntentState} variant="secondary">
               Check State
             </ActionButton>
@@ -1252,7 +1294,7 @@ export default function HomePage() {
               <div className="mb-3 grid gap-3 sm:grid-cols-3">
                 <Demand label="Checked" value={`${reconciliation.summary.checked}/${reconciliation.summary.total}`} />
                 <Demand label="Consistent" value={`${reconciliation.summary.consistent}`} />
-                <Demand label="Mismatch" value={`${reconciliation.summary.mismatched}`} />
+                <Demand label="Mismatch / Local" value={`${reconciliation.summary.mismatched} / ${reconciliation.summary.localOnly}`} />
               </div>
               <div className="grid max-h-[320px] gap-2 overflow-auto">
                 {reconciliation.intents.length === 0 ? (
@@ -1261,8 +1303,8 @@ export default function HomePage() {
                   reconciliation.intents.map((intent) => (
                     <Row key={intent.intentId}>
                       <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill tone={intent.consistent ? "ready" : "warn"}>
-                          {intent.consistent ? "OK" : "Mismatch"}
+                        <StatusPill tone={intentStateTone(intent)}>
+                          {intentStateLabel(intent)}
                         </StatusPill>
                         <strong>{shortAddress(intent.intentId)}</strong>
                         {intent.onchainIntentId ? <span>{shortAddress(intent.onchainIntentId)}</span> : <span>local only</span>}
@@ -1623,6 +1665,18 @@ function chainIntentLabel(chain: IntentReconciliation["intents"][number]["chain"
   if (chain.error) return "READ_FAILED";
   if (!chain.exists) return "MISSING";
   return chain.status ?? "UNKNOWN";
+}
+
+function intentStateLabel(intent: IntentReconciliation["intents"][number]) {
+  if (intent.consistent) return "OK";
+  if (!intent.onchainIntentId) return intent.db.status === "LOCAL_ONLY" ? "Local" : "Local-only";
+  if (intent.chain.error) return "Read failed";
+  return "Mismatch";
+}
+
+function intentStateTone(intent: IntentReconciliation["intents"][number]): "ready" | "warn" | undefined {
+  if (intent.consistent || (!intent.onchainIntentId && intent.db.status === "LOCAL_ONLY")) return "ready";
+  return "warn";
 }
 
 function formatDifference(difference: IntentReconciliation["intents"][number]["differences"][number]) {

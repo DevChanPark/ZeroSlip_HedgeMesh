@@ -9,7 +9,7 @@ import test from "node:test";
 import { PrismaClient } from "@prisma/client";
 
 import { createRequestHandler } from "../src/server/app.js";
-import { reconcileMantleSepoliaIntents } from "../src/server/chain-state.js";
+import { reconcileMantleSepoliaIntents, repairMantleSepoliaIntents } from "../src/server/chain-state.js";
 import { syncMantleSepoliaEvents } from "../src/server/chain-sync.js";
 
 const NOW = Date.parse("2026-05-20T00:00:00.000Z");
@@ -77,6 +77,7 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
   });
   const syncCalls = [];
   const reconcileCalls = [];
+  const repairCalls = [];
   const handler = createRequestHandler({
     prisma,
     now: () => NOW,
@@ -98,6 +99,32 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
           readFailed: 0
         },
         intents: []
+      };
+    },
+    repairIntents: async (_prisma, body, options) => {
+      repairCalls.push({ body, options });
+      return {
+        ok: true,
+        status: 200,
+        network: body.network ?? "mantle-sepolia",
+        action: body.action,
+        updatedCount: 1,
+        updates: [{ intentId: "api_short_mnt_10000", action: body.action }],
+        reconciliation: {
+          network: body.network ?? "mantle-sepolia",
+          asset: body.asset ?? "ALL",
+          contractAddress: "0x7489039281b77aab0ef24f56e333f28cfc352ee9",
+          summary: {
+            total: 2,
+            withOnchainId: 2,
+            checked: 2,
+            consistent: 2,
+            mismatched: 0,
+            localOnly: 0,
+            readFailed: 0
+          },
+          intents: []
+        }
       };
     },
     syncChainEvents: async (_prisma, body, options) => {
@@ -251,6 +278,17 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(reconcileCalls[0].body.asset, "MNT");
     assert.equal(reconcileCalls[0].options.now, NOW);
 
+    const repair = await invokeJson(handler, "POST", "/api/intents/reconcile/apply", {
+      network: "mantle-sepolia",
+      asset: "MNT",
+      action: "APPLY_CHAIN_STATE"
+    });
+    assert.equal(repair.status, 200);
+    assert.equal(repair.body.updatedCount, 1);
+    assert.equal(repairCalls.length, 1);
+    assert.equal(repairCalls[0].body.action, "APPLY_CHAIN_STATE");
+    assert.equal(repairCalls[0].options.now, NOW);
+
     const rpcSync = await syncMantleSepoliaEvents(
       prisma,
       {
@@ -336,6 +374,70 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(rpcReconcile.summary.checked, 1);
     assert.equal(rpcReconcile.summary.consistent, 1);
     assert.equal(rpcReconcile.intents[0].consistent, true);
+
+    const rpcApplyRepair = await repairMantleSepoliaIntents(
+      prisma,
+      {
+        network: "mantle-sepolia",
+        asset: "USDC",
+        action: "APPLY_CHAIN_STATE"
+      },
+      {
+        client: {
+          readContract: async ({ args }) => {
+            assert.equal(args[0], validOnchainIntentId);
+            return [
+              "0xE000000000000000000000000000000000000005",
+              "USDC",
+              "LONG",
+              1234n,
+              60n,
+              12n,
+              "HIGH",
+              1234n,
+              BigInt(Math.floor(NOW / 1000)),
+              BigInt(Math.floor((NOW + 60 * 60 * 1000) / 1000)),
+              2
+            ];
+          }
+        }
+      }
+    );
+    assert.equal(rpcApplyRepair.status, 200);
+    assert.equal(rpcApplyRepair.updatedCount, 1);
+    const repairedUsdc = await prisma.hedgeIntent.findUniqueOrThrow({
+      where: { id: "api_reconcile_usdc" }
+    });
+    assert.equal(Number(repairedUsdc.filledNotionalUsd), 1234);
+    assert.equal(repairedUsdc.status, "MATCHED");
+
+    await prisma.hedgeIntent.create({
+      data: {
+        id: "api_local_only_mnt",
+        walletAddress: "0xF000000000000000000000000000000000000006",
+        asset: "MNT",
+        direction: "SHORT",
+        notionalUsd: 500,
+        durationMinutes: 60,
+        maxCostBps: 12,
+        urgency: "LOW",
+        status: "OPEN",
+        filledNotionalUsd: 0,
+        createdAt: new Date(NOW),
+        expiresAt: new Date(NOW + 60 * 60 * 1000)
+      }
+    });
+    const archiveRepair = await repairMantleSepoliaIntents(prisma, {
+      network: "mantle-sepolia",
+      asset: "MNT",
+      action: "ARCHIVE_LOCAL_ONLY"
+    });
+    assert.equal(archiveRepair.status, 200);
+    assert.equal(archiveRepair.updates.some((update) => update.intentId === "api_local_only_mnt"), true);
+    const archivedLocalOnly = await prisma.hedgeIntent.findUniqueOrThrow({
+      where: { id: "api_local_only_mnt" }
+    });
+    assert.equal(archivedLocalOnly.status, "LOCAL_ONLY");
 
     const fillEvent = await invokeJson(handler, "POST", "/api/chain-events", {
       network: "mantle-sepolia",
