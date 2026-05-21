@@ -1,0 +1,27 @@
+{
+  "deployments": [
+    {
+      "network": "mantle-sepolia",
+      "chainId": 5003,
+      "contractName": "IntentBook",
+      "contractAddress": "0x7489039281b77aab0ef24f56e333f28cfc352ee9",
+      "deployTxHash": "0x036d06b23e778124b9ec155d9016ff476b91796e4db166e1773c0f47c5d0ca0f",
+      "deployerAddress": "0xfeded3f5d0285324758df9e72afc89a0dacb3c13",
+      "explorerUrl": "https://explorer.sepolia.mantle.xyz/address/0x7489039281b77aab0ef24f56e333f28cfc352ee9",
+      "blockNumber": 38900476,
+      "gasUsed": 1041768
+    },
+    {
+      "network": "mantle-sepolia",
+      "chainId": 5003,
+      "contractName": "MatchLog",
+      "contractAddress": "0xc02797d86f47ac6757383039b4bb5c2d9fe4e3cc",
+      "deployTxHash": "0x24981b673a37cc0402171fdc748ad4bbc21cdf3edd07708ff5c41e551601324a",
+      "deployerAddress": "0xfeded3f5d0285324758df9e72afc89a0dacb3c13",
+      "explorerUrl": "https://explorer.sepolia.mantle.xyz/address/0xc02797d86f47ac6757383039b4bb5c2d9fe4e3cc",
+      "blockNumber": 38900480,
+      "gasUsed": 311506
+    }
+  ],
+  "updatedAt": "2026-05-21T06:40:37.661774+00:00"
+}
