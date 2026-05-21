@@ -9,6 +9,7 @@ import test from "node:test";
 import { PrismaClient } from "@prisma/client";
 
 import { createRequestHandler } from "../src/server/app.js";
+import { reconcileMantleSepoliaIntents } from "../src/server/chain-state.js";
 import { syncMantleSepoliaEvents } from "../src/server/chain-sync.js";
 
 const NOW = Date.parse("2026-05-20T00:00:00.000Z");
@@ -75,9 +76,30 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     }
   });
   const syncCalls = [];
+  const reconcileCalls = [];
   const handler = createRequestHandler({
     prisma,
     now: () => NOW,
+    reconcileIntents: async (_prisma, body, options) => {
+      reconcileCalls.push({ body, options });
+      return {
+        ok: true,
+        status: 200,
+        network: body.network ?? "mantle-sepolia",
+        asset: body.asset ?? "ALL",
+        contractAddress: "0x7489039281b77aab0ef24f56e333f28cfc352ee9",
+        summary: {
+          total: 2,
+          withOnchainId: 2,
+          checked: 2,
+          consistent: 1,
+          mismatched: 1,
+          localOnly: 0,
+          readFailed: 0
+        },
+        intents: []
+      };
+    },
     syncChainEvents: async (_prisma, body, options) => {
       syncCalls.push({ body, options });
       return {
@@ -219,6 +241,16 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(syncCalls[0].body.fromBlock, 38900476);
     assert.equal(syncCalls[0].options.now, NOW);
 
+    const reconcile = await invokeJson(handler, "POST", "/api/intents/reconcile", {
+      network: "mantle-sepolia",
+      asset: "MNT"
+    });
+    assert.equal(reconcile.status, 200);
+    assert.equal(reconcile.body.summary.checked, 2);
+    assert.equal(reconcileCalls.length, 1);
+    assert.equal(reconcileCalls[0].body.asset, "MNT");
+    assert.equal(reconcileCalls[0].options.now, NOW);
+
     const rpcSync = await syncMantleSepoliaEvents(
       prisma,
       {
@@ -254,6 +286,56 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(rpcSync.status, 200);
     assert.equal(rpcSync.syncedCount, 1);
     assert.equal(rpcSync.events[0].eventName, "HedgeIntentMatched");
+
+    const validOnchainIntentId = `0x${"1".padStart(64, "0")}`;
+    await prisma.hedgeIntent.create({
+      data: {
+        id: "api_reconcile_usdc",
+        walletAddress: "0xE000000000000000000000000000000000000005",
+        asset: "USDC",
+        direction: "LONG",
+        notionalUsd: 1234,
+        durationMinutes: 60,
+        maxCostBps: 12,
+        urgency: "HIGH",
+        status: "OPEN",
+        filledNotionalUsd: 0,
+        onchainIntentId: validOnchainIntentId,
+        createdAt: new Date(NOW),
+        expiresAt: new Date(NOW + 60 * 60 * 1000)
+      }
+    });
+    const rpcReconcile = await reconcileMantleSepoliaIntents(
+      prisma,
+      {
+        network: "mantle-sepolia",
+        asset: "USDC"
+      },
+      {
+        client: {
+          readContract: async ({ args }) => {
+            assert.equal(args[0], validOnchainIntentId);
+            return [
+              "0xE000000000000000000000000000000000000005",
+              "USDC",
+              "LONG",
+              1234n,
+              60n,
+              12n,
+              "HIGH",
+              0n,
+              BigInt(Math.floor(NOW / 1000)),
+              BigInt(Math.floor((NOW + 60 * 60 * 1000) / 1000)),
+              0
+            ];
+          }
+        }
+      }
+    );
+    assert.equal(rpcReconcile.status, 200);
+    assert.equal(rpcReconcile.summary.checked, 1);
+    assert.equal(rpcReconcile.summary.consistent, 1);
+    assert.equal(rpcReconcile.intents[0].consistent, true);
 
     const fillEvent = await invokeJson(handler, "POST", "/api/chain-events", {
       network: "mantle-sepolia",

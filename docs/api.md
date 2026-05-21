@@ -146,6 +146,54 @@ Return intent book summary.
 }
 ```
 
+## POST /api/intents/reconcile
+
+Compare local `HedgeIntent` rows with the deployed Mantle Sepolia `IntentBook`
+mapping. This is a read-only operational check: it does not mutate the DB or
+send a transaction.
+
+Request:
+
+```json
+{
+  "network": "mantle-sepolia",
+  "asset": "MNT",
+  "limit": 40
+}
+```
+
+Response:
+
+```json
+{
+  "network": "mantle-sepolia",
+  "contractAddress": "0x7489...",
+  "asset": "MNT",
+  "summary": {
+    "total": 2,
+    "withOnchainId": 2,
+    "checked": 2,
+    "consistent": 2,
+    "mismatched": 0,
+    "localOnly": 0,
+    "readFailed": 0
+  },
+  "intents": [
+    {
+      "intentId": "intent_MNT_...",
+      "onchainIntentId": "0x...",
+      "consistent": true,
+      "differences": []
+    }
+  ]
+}
+```
+
+The comparison checks owner, asset, direction, notional, duration, max cost,
+urgency, filled amount, and status. Block timestamps are returned for context
+but are not treated as hard mismatches because DB creation time is recorded
+after the transaction receipt.
+
 ## GET /api/dashboard?asset=MNT
 
 Return DB-backed KPI totals for the web console. The response is designed to

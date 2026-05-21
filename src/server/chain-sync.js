@@ -136,7 +136,7 @@ export async function syncMantleSepoliaEvents(prisma, input = {}, options = {}) 
   };
 }
 
-async function loadDeployments(prisma, network) {
+export async function loadDeployments(prisma, network) {
   const fileDeployments = await readDeploymentFile(network);
   const dbDeployments = await prisma.chainDeployment.findMany({
     where: { network },

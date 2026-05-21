@@ -139,6 +139,41 @@ type OperatorState = {
   loaded: boolean;
 };
 
+type IntentReconciliation = {
+  network: string;
+  contractAddress: string;
+  asset: string;
+  summary: {
+    total: number;
+    withOnchainId: number;
+    checked: number;
+    consistent: number;
+    mismatched: number;
+    localOnly: number;
+    readFailed: number;
+  };
+  intents: Array<{
+    intentId: string;
+    onchainIntentId?: string | null;
+    db: {
+      status: string;
+      filledNotionalUsd: number;
+    };
+    chain: {
+      exists: boolean;
+      status?: string | null;
+      filledNotionalUsd?: number | null;
+      error?: string;
+    };
+    consistent: boolean;
+    differences: Array<{
+      field: string;
+      db: unknown;
+      chain: unknown;
+    }>;
+  }>;
+};
+
 type DashboardResponse = {
   totals: {
     intentCount: number;
@@ -354,6 +389,7 @@ export default function HomePage() {
   const [latestMatch, setLatestMatch] = useState<MatchResponse | null>(null);
   const [events, setEvents] = useState<ChainEvent[]>([]);
   const [operators, setOperators] = useState<OperatorState>({ loaded: false });
+  const [reconciliation, setReconciliation] = useState<IntentReconciliation | null>(null);
   const [intentOutput, setIntentOutput] = useState("Ready.");
   const [chainOutput, setChainOutput] = useState("No chain log yet.");
   const [busy, setBusy] = useState<string | null>(null);
@@ -970,6 +1006,28 @@ export default function HomePage() {
     });
   }
 
+  async function reconcileIntentState() {
+    await runBusy("reconcile-intents", async () => {
+      const result = await api<IntentReconciliation>("/api/intents/reconcile", {
+        method: "POST",
+        body: { network: "mantle-sepolia", asset: draft.asset }
+      });
+      setReconciliation(result);
+      setChainOutput(
+        JSON.stringify(
+          {
+            status: "reconciled_intent_book",
+            asset: result.asset,
+            contractAddress: result.contractAddress,
+            summary: result.summary
+          },
+          null,
+          2
+        )
+      );
+    });
+  }
+
   async function recordChainEvent(input: Record<string, unknown>) {
     return api("/api/chain-events", {
       method: "POST",
@@ -1182,6 +1240,55 @@ export default function HomePage() {
           </div>
           <Output value={chainOutput} />
         </Panel>
+
+        <Panel eyebrow="Step 5" title="DB / Chain State">
+          <div className="mb-3 flex flex-wrap justify-end gap-2">
+            <ActionButton busy={busy === "reconcile-intents"} icon={<ShieldCheck size={17} />} onClick={reconcileIntentState} variant="secondary">
+              Check State
+            </ActionButton>
+          </div>
+          {reconciliation ? (
+            <>
+              <div className="mb-3 grid gap-3 sm:grid-cols-3">
+                <Demand label="Checked" value={`${reconciliation.summary.checked}/${reconciliation.summary.total}`} />
+                <Demand label="Consistent" value={`${reconciliation.summary.consistent}`} />
+                <Demand label="Mismatch" value={`${reconciliation.summary.mismatched}`} />
+              </div>
+              <div className="grid max-h-[320px] gap-2 overflow-auto">
+                {reconciliation.intents.length === 0 ? (
+                  <Row muted>No local intents to compare.</Row>
+                ) : (
+                  reconciliation.intents.map((intent) => (
+                    <Row key={intent.intentId}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusPill tone={intent.consistent ? "ready" : "warn"}>
+                          {intent.consistent ? "OK" : "Mismatch"}
+                        </StatusPill>
+                        <strong>{shortAddress(intent.intentId)}</strong>
+                        {intent.onchainIntentId ? <span>{shortAddress(intent.onchainIntentId)}</span> : <span>local only</span>}
+                      </div>
+                      <span>
+                        DB {intent.db.status} / {usd(intent.db.filledNotionalUsd)} filled
+                      </span>
+                      <span>
+                        Chain {chainIntentLabel(intent.chain)} / {usd(intent.chain.filledNotionalUsd ?? 0)} filled
+                      </span>
+                      {intent.differences.length > 0 ? (
+                        <span className="text-amber">
+                          {intent.differences.slice(0, 3).map(formatDifference).join(" | ")}
+                        </span>
+                      ) : (
+                        <span className="text-[#6fd08c]">DB and IntentBook state match.</span>
+                      )}
+                    </Row>
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            <Row muted>Run Check State to compare local DB intents with Mantle Sepolia IntentBook.</Row>
+          )}
+        </Panel>
       </section>
     </main>
   );
@@ -1288,7 +1395,7 @@ function Demand({ label, value }: { label: string; value: string }) {
 function Row({ children, muted = false }: { children: React.ReactNode; muted?: boolean }) {
   return (
     <article className="grid gap-1 rounded-lg border border-[#2d3740] bg-[#151a1f] p-3 text-sm">
-      <span className={muted ? "text-[#9ba7b1]" : "contents"}>{children}</span>
+      <div className={muted ? "text-[#9ba7b1]" : "contents"}>{children}</div>
     </article>
   );
 }
@@ -1510,6 +1617,22 @@ function getFillSyncTargets(match: MatchResponse): FillSyncTarget[] {
     }
   }
   return targets;
+}
+
+function chainIntentLabel(chain: IntentReconciliation["intents"][number]["chain"]) {
+  if (chain.error) return "READ_FAILED";
+  if (!chain.exists) return "MISSING";
+  return chain.status ?? "UNKNOWN";
+}
+
+function formatDifference(difference: IntentReconciliation["intents"][number]["differences"][number]) {
+  return `${difference.field}: DB ${formatStateValue(difference.db)} / Chain ${formatStateValue(difference.chain)}`;
+}
+
+function formatStateValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "none";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function toHexString(value?: string | null): `0x${string}` | null {
