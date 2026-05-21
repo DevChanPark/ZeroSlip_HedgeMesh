@@ -216,6 +216,17 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(decision.body.decisionType, "MATCH");
     assert.equal(decision.body.matchId, "api_match_mnt");
 
+    const explained = await invokeJson(handler, "POST", "/api/decision/explain", {
+      asset: "MNT",
+      matchResult: match.body.matchResult,
+      costComparison: match.body.costComparison,
+      maxCostBps: 30,
+      urgency: "MEDIUM"
+    });
+    assert.equal(explained.status, 200);
+    assert.equal(explained.body.decisionType, "MATCH");
+    assert.equal(explained.body.aiSource, "deterministic");
+
     const hedgeMatchedEventBody = {
       network: "mantle-sepolia",
       chainId: 5003,

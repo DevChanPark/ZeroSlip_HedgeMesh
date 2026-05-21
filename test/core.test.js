@@ -7,6 +7,10 @@ import { matchIntents } from "../src/core/matching.js";
 import { createIntent } from "../src/core/model.js";
 import { parseNaturalLanguageIntent } from "../src/core/parser.js";
 import { buildDemoIntents } from "../src/core/sample-data.js";
+import {
+  buildAgentDecisionWithAiFallback,
+  parseIntentWithAiFallback
+} from "../src/server/ai-service.js";
 
 const NOW = Date.parse("2026-05-20T00:00:00.000Z");
 
@@ -144,3 +148,104 @@ test("builds structured MATCH decision explanation from deterministic outputs", 
   assert.ok(decision.risks.includes("Residual hedge exposure remains unmatched"));
 });
 
+test("uses structured AI parser output when an OpenAI client is configured", async () => {
+  const parsed = await parseIntentWithAiFallback("대충 MNT 하락 방어", {
+    apiKey: "test-key",
+    fetch: async () =>
+      jsonResponse({
+        output_text: JSON.stringify({
+          asset: "MNT",
+          direction: "SHORT",
+          notionalUsd: 2500,
+          durationMinutes: 120,
+          maxCostBps: 9,
+          urgency: "HIGH",
+          confidence: 0.93,
+          requiresManualReview: false,
+          errors: []
+        })
+      })
+  });
+
+  assert.equal(parsed.aiSource, "openai");
+  assert.equal(parsed.asset, "MNT");
+  assert.equal(parsed.direction, "SHORT");
+  assert.equal(parsed.notionalUsd, 2500);
+  assert.equal(parsed.durationMinutes, 120);
+  assert.equal(parsed.maxCostBps, 9);
+  assert.equal(parsed.urgency, "HIGH");
+  assert.equal(parsed.requiresManualReview, false);
+});
+
+test("falls back to deterministic parsing when OpenAI is not configured", async () => {
+  const parsed = await parseIntentWithAiFallback(
+    "나 MNT 1,000달러 하락 리스크를 1시간 막고 싶어. 비용은 10bps 이하."
+  );
+
+  assert.equal(parsed.aiSource, "deterministic");
+  assert.equal(parsed.asset, "MNT");
+  assert.equal(parsed.direction, "SHORT");
+});
+
+test("redacts OpenAI errors before returning fallback output", async () => {
+  const parsed = await parseIntentWithAiFallback(
+    "나 MNT 1,000달러 하락 리스크를 1시간 막고 싶어. 비용은 10bps 이하.",
+    {
+      apiKey: "test-key",
+      fetch: async () =>
+        jsonResponse(
+          {
+            error: {
+              message: "Incorrect API key provided: sk-proj-secret"
+            }
+          },
+          401
+        )
+    }
+  );
+
+  assert.equal(parsed.aiSource, "deterministic");
+  assert.equal(parsed.aiError, "OpenAI request failed; deterministic fallback used");
+  assert.doesNotMatch(parsed.aiError, /sk-/);
+});
+
+test("uses AI wording without changing deterministic decision math", async () => {
+  const matchResult = matchIntents(buildDemoIntents(NOW), { asset: "MNT", now: NOW });
+  const costComparison = compareCosts(matchResult);
+  const decision = await buildAgentDecisionWithAiFallback(
+    {
+      asset: "MNT",
+      matchResult,
+      costComparison,
+      maxCostBps: 30,
+      urgency: "MEDIUM"
+    },
+    {
+      apiKey: "test-key",
+      now: NOW,
+      fetch: async () =>
+        jsonResponse({
+          output_text: JSON.stringify({
+            summary: "Matched opposite MNT hedge demand internally.",
+            reason: "AI wording: the deterministic engine matched compatible opposite intents and reduced residual external routing.",
+            risks: ["Residual short exposure remains"],
+            recommendedAction: "Log match and simulate residual route"
+          })
+        })
+    }
+  );
+
+  assert.equal(decision.aiSource, "openai");
+  assert.equal(decision.decisionType, "MATCH");
+  assert.equal(decision.internalMatchUsd, 7000);
+  assert.equal(decision.residualUsd, 3000);
+  assert.match(decision.reason, /AI wording/);
+});
+
+function jsonResponse(payload, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload
+  };
+}

@@ -29,6 +29,9 @@ Response:
 ## POST /api/intent/parse
 
 Parse natural language into a structured hedge intent.
+If `OPENAI_API_KEY` is configured, the API first asks the AI layer for a strict
+JSON schema response. If AI is unavailable or the output fails validation, the
+deterministic local parser is used as a fallback.
 
 Request:
 
@@ -48,7 +51,8 @@ Response:
   "durationMinutes": 60,
   "maxCostBps": 10,
   "urgency": "MEDIUM",
-  "confidence": 0.92
+  "confidence": 0.92,
+  "aiSource": "openai"
 }
 ```
 
@@ -389,6 +393,9 @@ Response:
 ## POST /api/decision/explain
 
 Return structured decision explanation.
+The matching and cost math stay deterministic; AI is only allowed to rewrite the
+human-readable explanation, risks, and recommended action. If `OPENAI_API_KEY`
+is not configured, the deterministic explanation is returned.
 
 Response:
 
@@ -399,7 +406,9 @@ Response:
   "risks": [
     "Residual short demand remains unmatched",
     "External hedge cost may change before execution"
-  ]
+  ],
+  "recommendedAction": "Log match and simulate residual route",
+  "aiSource": "openai"
 }
 ```
 

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import { compareCosts } from "../core/cost.js";
-import { buildAgentDecision } from "../core/decision.js";
 import { matchIntents } from "../core/matching.js";
 import {
   ACTIVE_STATUSES,
@@ -9,10 +8,10 @@ import {
   normalizeAsset,
   validateIntentDraft
 } from "../core/model.js";
-import { parseNaturalLanguageIntent } from "../core/parser.js";
+import { buildAgentDecisionWithAiFallback, parseIntentWithAiFallback } from "./ai-service.js";
 
-export function parseIntentText(text) {
-  return parseNaturalLanguageIntent(text);
+export async function parseIntentText(text, options = {}) {
+  return parseIntentWithAiFallback(text, options);
 }
 
 export async function createHedgeIntent(prisma, input, options = {}) {
@@ -175,7 +174,7 @@ export async function runMatching(prisma, input, options = {}) {
   };
   matchResult.allocations = enrichAllocations(matchResult.allocations, dbIntents);
   const costComparison = compareCosts(matchResult);
-  const decision = buildAgentDecision(
+  const decision = await buildAgentDecisionWithAiFallback(
     {
       asset,
       matchResult,
@@ -265,6 +264,32 @@ export async function getDecision(prisma, decisionId) {
     createdAt: decision.createdAt.getTime(),
     matchId: decision.matchId
   };
+}
+
+export async function explainAgentDecision(input, options = {}) {
+  const required = ["asset", "matchResult", "costComparison"];
+  const missing = required.filter((field) => input[field] === undefined || input[field] === null);
+  if (missing.length > 0) {
+    return { ok: false, status: 400, errors: missing.map((field) => `${field} is required`) };
+  }
+
+  const asset = normalizeAsset(input.asset);
+  if (!asset) {
+    return { ok: false, status: 400, errors: ["supported asset is required"] };
+  }
+
+  const decision = await buildAgentDecisionWithAiFallback(
+    {
+      asset,
+      matchResult: input.matchResult,
+      costComparison: input.costComparison,
+      maxCostBps: input.maxCostBps,
+      urgency: input.urgency
+    },
+    options
+  );
+
+  return { ok: true, status: 200, decision };
 }
 
 export async function recordChainEvent(prisma, input, options = {}) {

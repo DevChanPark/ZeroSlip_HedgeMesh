@@ -21,9 +21,14 @@ MANTLE_SEPOLIA_RPC_URL="https://rpc.sepolia.mantle.xyz"
 MANTLE_SEPOLIA_CHAIN_ID="5003"
 MANTLE_SEPOLIA_EXPLORER_URL="https://explorer.sepolia.mantle.xyz"
 DEPLOYER_PRIVATE_KEY="..."
+OPENAI_API_KEY=""
+OPENAI_MODEL="gpt-4o-mini"
+OPENAI_TIMEOUT_MS="12000"
 ```
 
 Never commit a funded private key.
+`OPENAI_API_KEY` is optional. When it is unset, the parser and decision
+explanation use deterministic local fallbacks.
 
 ## Local Setup
 

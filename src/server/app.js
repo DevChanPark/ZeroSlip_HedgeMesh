@@ -8,6 +8,7 @@ import {
   buildCostComparison,
   cancelHedgeIntent,
   createHedgeIntent,
+  explainAgentDecision,
   expireHedgeIntents,
   getDashboard,
   getDecision,
@@ -55,7 +56,7 @@ export function createRequestHandler({
 
       if (req.method === "POST" && url.pathname === "/api/intent/parse") {
         const body = await readJson(req);
-        return sendJson(res, 200, parseIntentText(body.text));
+        return sendJson(res, 200, await parseIntentText(body.text));
       }
 
       if (req.method === "POST" && url.pathname === "/api/intents") {
@@ -166,6 +167,12 @@ export function createRequestHandler({
         return decision
           ? sendJson(res, 200, decision)
           : sendJson(res, 404, { errors: ["decision not found"] });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/decision/explain") {
+        const body = await readJson(req);
+        const result = await explainAgentDecision(body, { now: now() });
+        return sendJson(res, result.status, result.ok ? result.decision : { errors: result.errors });
       }
 
       if (req.method === "POST" && url.pathname === "/api/chain-events") {
