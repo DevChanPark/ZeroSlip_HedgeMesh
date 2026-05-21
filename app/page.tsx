@@ -7,8 +7,10 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
+  TimerReset,
   Wallet,
-  Wand2
+  Wand2,
+  XCircle
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useChainId, useConnect, useDisconnect, usePublicClient, useSendTransaction, useSwitchChain } from "wagmi";
@@ -39,6 +41,8 @@ type HedgeIntent = HedgeIntentDraft & {
   filledNotionalUsd: number;
   onchainIntentId?: string | null;
   submitTxHash?: string | null;
+  createdAt: number;
+  expiresAt: number;
 };
 
 type IntentBook = {
@@ -93,6 +97,7 @@ type DashboardResponse = {
     rejectedDecisionCount: number;
     matchedNotionalUsd: number;
     residualNotionalUsd: number;
+    historicalResidualNotionalUsd: number;
     residualDirection: string;
     internalMatchRate: number;
     naiveExternalVolumeUsd: number;
@@ -137,6 +142,20 @@ const intentBookAbi = [
     outputs: [{ name: "intentId", type: "bytes32" }]
   },
   {
+    type: "function",
+    name: "cancelIntent",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "intentId", type: "bytes32" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "expireIntent",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "intentId", type: "bytes32" }],
+    outputs: []
+  },
+  {
     type: "event",
     name: "HedgeIntentSubmitted",
     inputs: [
@@ -149,6 +168,22 @@ const intentBookAbi = [
       { indexed: false, name: "maxCostBps", type: "uint256" },
       { indexed: false, name: "createdAt", type: "uint256" },
       { indexed: false, name: "expiresAt", type: "uint256" }
+    ]
+  },
+  {
+    type: "event",
+    name: "HedgeIntentCancelled",
+    inputs: [
+      { indexed: true, name: "intentId", type: "bytes32" },
+      { indexed: true, name: "user", type: "address" }
+    ]
+  },
+  {
+    type: "event",
+    name: "HedgeIntentExpired",
+    inputs: [
+      { indexed: true, name: "intentId", type: "bytes32" },
+      { indexed: true, name: "user", type: "address" }
     ]
   }
 ] as const;
@@ -409,6 +444,163 @@ export default function HomePage() {
     });
   }
 
+  async function expireStaleBook() {
+    await runBusy("expire-stale", async () => {
+      await expireStaleIntents();
+    });
+  }
+
+  async function cancelIntent(intent: HedgeIntent) {
+    await runBusy(`cancel:${intent.intentId}`, async () => {
+      if (!address) throw new Error("Connect wallet first");
+      if (!canCancelIntent(intent, address)) throw new Error("Only the owner can cancel this active intent");
+
+      let txHash: `0x${string}` | null = null;
+      let blockNumber: number | null = null;
+      let cancelledArgs: unknown = null;
+
+      if (intent.onchainIntentId) {
+        if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
+        await ensureMantleSepolia();
+
+        const data = encodeFunctionData({
+          abi: intentBookAbi,
+          functionName: "cancelIntent",
+          args: [intent.onchainIntentId as `0x${string}`]
+        });
+        txHash = await sendTransactionAsync({
+          chainId: mantleSepolia.id,
+          to: CONTRACTS.intentBook,
+          data
+        });
+        setIntentOutput(JSON.stringify({ txHash, status: "waiting_for_cancel_receipt", explorer: txLink(txHash) }, null, 2));
+
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+        if (receipt.status !== "success") {
+          throw new Error(`Intent cancel reverted: ${txHash}`);
+        }
+        blockNumber = blockNumberToNumber(receipt.blockNumber);
+        const cancelledLog = parseEventLogs({
+          abi: intentBookAbi,
+          eventName: "HedgeIntentCancelled",
+          logs: receipt.logs
+        })[0];
+        cancelledArgs = cancelledLog?.args ?? null;
+      }
+
+      const updated = await api<HedgeIntent>(`/api/intents/${encodeURIComponent(intent.intentId)}/cancel`, {
+        method: "POST",
+        body: { user: address }
+      });
+
+      if (txHash) {
+        await recordChainEvent({
+          eventName: "HedgeIntentCancelled",
+          contractName: "IntentBook",
+          contractAddress: CONTRACTS.intentBook,
+          txHash,
+          blockNumber,
+          intentId: intent.intentId,
+          onchainId: intent.onchainIntentId,
+          payload: stringifyBigInts(cancelledArgs ?? {})
+        });
+      }
+
+      setIntentOutput(
+        JSON.stringify(
+          {
+            status: "cancelled",
+            txHash,
+            blockNumber,
+            explorer: txHash ? txLink(txHash) : null,
+            dbIntent: updated
+          },
+          null,
+          2
+        )
+      );
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
+    });
+  }
+
+  async function expireIntent(intent: HedgeIntent) {
+    await runBusy(`expire:${intent.intentId}`, async () => {
+      if (!isExpirableIntent(intent)) throw new Error("Intent is not expired yet");
+
+      let txHash: `0x${string}` | null = null;
+      let blockNumber: number | null = null;
+      let expiredArgs: unknown = null;
+
+      if (intent.onchainIntentId) {
+        if (!publicClient) throw new Error("Mantle Sepolia public client unavailable");
+        await ensureMantleSepolia();
+
+        const data = encodeFunctionData({
+          abi: intentBookAbi,
+          functionName: "expireIntent",
+          args: [intent.onchainIntentId as `0x${string}`]
+        });
+        txHash = await sendTransactionAsync({
+          chainId: mantleSepolia.id,
+          to: CONTRACTS.intentBook,
+          data
+        });
+        setIntentOutput(JSON.stringify({ txHash, status: "waiting_for_expire_receipt", explorer: txLink(txHash) }, null, 2));
+
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+        if (receipt.status !== "success") {
+          throw new Error(`Intent expire reverted: ${txHash}`);
+        }
+        blockNumber = blockNumberToNumber(receipt.blockNumber);
+        const expiredLog = parseEventLogs({
+          abi: intentBookAbi,
+          eventName: "HedgeIntentExpired",
+          logs: receipt.logs
+        })[0];
+        expiredArgs = expiredLog?.args ?? null;
+
+        await recordChainEvent({
+          eventName: "HedgeIntentExpired",
+          contractName: "IntentBook",
+          contractAddress: CONTRACTS.intentBook,
+          txHash,
+          blockNumber,
+          intentId: intent.intentId,
+          onchainId: intent.onchainIntentId,
+          payload: stringifyBigInts(expiredArgs ?? {})
+        });
+      } else {
+        await expireStaleIntents(false);
+      }
+
+      setIntentOutput(
+        JSON.stringify(
+          {
+            status: "expired",
+            txHash,
+            blockNumber,
+            explorer: txHash ? txLink(txHash) : null
+          },
+          null,
+          2
+        )
+      );
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
+    });
+  }
+
+  async function expireStaleIntents(showOutput = true) {
+    const result = await api<{ expiredCount: number; intents: HedgeIntent[] }>("/api/intents/expire", {
+      method: "POST",
+      body: { asset: draft.asset }
+    });
+    if (showOutput) {
+      setIntentOutput(JSON.stringify({ status: "expired_stale_intents", ...result }, null, 2));
+      await Promise.all([refreshDashboard(), refreshBook(), refreshEvents()]);
+    }
+    return result;
+  }
+
   async function runMatching() {
     await runBusy("match", async () => {
       const result = await api<MatchResponse>("/api/matching/run", {
@@ -653,7 +845,10 @@ export default function HomePage() {
         </Panel>
 
         <Panel eyebrow="Step 2" title="Intent Book">
-          <div className="mb-3 flex justify-end">
+          <div className="mb-3 flex flex-wrap justify-end gap-2">
+            <ActionButton busy={busy === "expire-stale"} icon={<TimerReset size={17} />} onClick={expireStaleBook} variant="secondary">
+              Expire Stale
+            </ActionButton>
             <ActionButton busy={busy === "refresh"} icon={<RefreshCw size={17} />} onClick={refreshAll} variant="secondary">
               Refresh
             </ActionButton>
@@ -674,7 +869,20 @@ export default function HomePage() {
                   <span>
                     {shortAddress(intent.user)} | {intent.status} | filled {usd(intent.filledNotionalUsd)}
                   </span>
-                  {intent.submitTxHash ? <ExplorerLink hash={intent.submitTxHash} /> : <span>No tx hash</span>}
+                  <span>Expires {new Date(intent.expiresAt).toLocaleString()}</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {intent.submitTxHash ? <ExplorerLink hash={intent.submitTxHash} /> : <span>No tx hash</span>}
+                    {canCancelIntent(intent, address) ? (
+                      <MiniButton busy={busy === `cancel:${intent.intentId}`} icon={<XCircle size={14} />} onClick={() => cancelIntent(intent)}>
+                        Cancel
+                      </MiniButton>
+                    ) : null}
+                    {isExpirableIntent(intent) ? (
+                      <MiniButton busy={busy === `expire:${intent.intentId}`} icon={<TimerReset size={14} />} onClick={() => expireIntent(intent)}>
+                        Expire
+                      </MiniButton>
+                    ) : null}
+                  </div>
                 </Row>
               ))
             )}
@@ -769,6 +977,30 @@ function ActionButton({
       type="button"
     >
       {busy ? <Activity className="animate-spin" size={17} /> : icon}
+      <span>{children}</span>
+    </button>
+  );
+}
+
+function MiniButton({
+  busy,
+  children,
+  icon,
+  onClick
+}: {
+  busy?: boolean;
+  children: React.ReactNode;
+  icon: React.ReactNode;
+  onClick: () => void | Promise<void>;
+}) {
+  return (
+    <button
+      className="inline-flex min-h-[30px] items-center gap-1 rounded-md border border-[#3a4650] bg-[#10161b] px-2 text-xs font-bold text-[#dbe6ed] disabled:cursor-wait disabled:opacity-60"
+      disabled={busy}
+      onClick={onClick}
+      type="button"
+    >
+      {busy ? <Activity className="animate-spin" size={14} /> : icon}
       <span>{children}</span>
     </button>
   );
@@ -921,6 +1153,22 @@ async function bytes32FromText(text: string): Promise<`0x${string}`> {
   const bytes = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `0x${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function isActiveIntent(intent: HedgeIntent) {
+  return intent.status === "OPEN" || intent.status === "PARTIALLY_MATCHED";
+}
+
+function isExpirableIntent(intent: HedgeIntent) {
+  return isActiveIntent(intent) && intent.expiresAt <= Date.now();
+}
+
+function canCancelIntent(intent: HedgeIntent, address?: `0x${string}`) {
+  return Boolean(
+    address &&
+      isActiveIntent(intent) &&
+      intent.user.toLowerCase() === address.toLowerCase()
+  );
 }
 
 function usd(value: number) {

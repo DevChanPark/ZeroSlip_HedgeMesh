@@ -63,6 +63,64 @@ export async function createHedgeIntent(prisma, input, options = {}) {
   return { ok: true, status: 201, intent: serializeIntent(saved) };
 }
 
+export async function cancelHedgeIntent(prisma, intentId, input = {}) {
+  if (!intentId) {
+    return { ok: false, status: 400, errors: ["intentId is required"] };
+  }
+  if (!input.user) {
+    return { ok: false, status: 400, errors: ["user is required"] };
+  }
+
+  const intent = await prisma.hedgeIntent.findUnique({ where: { id: intentId } });
+  if (!intent) {
+    return { ok: false, status: 404, errors: ["intent not found"] };
+  }
+
+  if (intent.walletAddress.toLowerCase() !== String(input.user).toLowerCase()) {
+    return { ok: false, status: 403, errors: ["only the intent owner can cancel"] };
+  }
+
+  if (!ACTIVE_STATUSES.includes(intent.status)) {
+    return { ok: false, status: 409, errors: [`intent is not cancellable from ${intent.status}`] };
+  }
+
+  const updated = await prisma.hedgeIntent.update({
+    where: { id: intentId },
+    data: { status: "CANCELLED" }
+  });
+
+  return { ok: true, status: 200, intent: serializeIntent(updated) };
+}
+
+export async function expireHedgeIntents(prisma, input = {}, options = {}) {
+  const now = options.now ?? Date.now();
+  const asset = normalizeAsset(input.asset);
+  const where = {
+    ...(asset ? { asset } : {}),
+    status: { in: ACTIVE_STATUSES },
+    expiresAt: { lte: new Date(now) }
+  };
+
+  const expired = await prisma.hedgeIntent.findMany({
+    where,
+    orderBy: [{ expiresAt: "asc" }]
+  });
+
+  if (expired.length > 0) {
+    await prisma.hedgeIntent.updateMany({
+      where: { id: { in: expired.map((intent) => intent.id) } },
+      data: { status: "EXPIRED" }
+    });
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    expiredCount: expired.length,
+    intents: expired.map((intent) => serializeIntent({ ...intent, status: "EXPIRED" }))
+  };
+}
+
 export async function listIntents(prisma, query = {}) {
   const asset = normalizeAsset(query.asset);
   const where = asset ? { asset } : {};
@@ -262,6 +320,26 @@ export async function recordChainEvent(prisma, input, options = {}) {
     });
   }
 
+  if (input.eventName === "HedgeIntentCancelled") {
+    const where = intentIdentityWhere(input);
+    if (where) {
+      await prisma.hedgeIntent.updateMany({
+        where,
+        data: { status: "CANCELLED" }
+      });
+    }
+  }
+
+  if (input.eventName === "HedgeIntentExpired") {
+    const where = intentIdentityWhere(input);
+    if (where) {
+      await prisma.hedgeIntent.updateMany({
+        where,
+        data: { status: "EXPIRED" }
+      });
+    }
+  }
+
   return { ok: true, status: 201, event: serializeChainEvent(event) };
 }
 
@@ -352,12 +430,13 @@ export async function getDashboard(prisma, query = {}, options = {}) {
   ]);
 
   const matchedNotionalUsd = decimalToNumber(matchAggregate._sum.matchedNotionalUsd);
-  const residualNotionalUsd = decimalToNumber(matchAggregate._sum.residualNotionalUsd);
+  const historicalResidualNotionalUsd = decimalToNumber(matchAggregate._sum.residualNotionalUsd);
+  const liveResidualNotionalUsd = intentBook.shortDemandUsd + intentBook.longDemandUsd;
   const naiveExternalVolumeUsd = decimalToNumber(matchAggregate._sum.naiveExternalVolumeUsd);
   const meshExternalVolumeUsd = decimalToNumber(matchAggregate._sum.meshExternalVolumeUsd);
   const externalLiquidityAvoidedUsd = decimalToNumber(matchAggregate._sum.externalLiquidityAvoidedUsd);
   const savedCostUsd = decimalToNumber(matchAggregate._sum.savedCostUsd);
-  const internalRateDenominator = matchedNotionalUsd + residualNotionalUsd;
+  const internalRateDenominator = matchedNotionalUsd + historicalResidualNotionalUsd;
 
   return {
     asset: asset ?? "ALL",
@@ -372,7 +451,8 @@ export async function getDashboard(prisma, query = {}, options = {}) {
       chainEventCount,
       rejectedDecisionCount,
       matchedNotionalUsd,
-      residualNotionalUsd,
+      residualNotionalUsd: liveResidualNotionalUsd,
+      historicalResidualNotionalUsd,
       residualDirection: getDashboardResidualDirection(
         intentBook.shortDemandUsd,
         intentBook.longDemandUsd
@@ -548,6 +628,13 @@ function getDashboardResidualDirection(shortDemandUsd, longDemandUsd) {
   if (shortDemandUsd > 0) return "SHORT";
   if (longDemandUsd > 0) return "LONG";
   return "NONE";
+}
+
+function intentIdentityWhere(input) {
+  const identity = [];
+  if (input.intentId) identity.push({ id: input.intentId });
+  if (input.onchainId) identity.push({ onchainIntentId: input.onchainId });
+  return identity.length > 0 ? { OR: identity } : null;
 }
 
 function parsePayload(payloadJson) {

@@ -164,11 +164,61 @@ test("HTTP API persists intents, matches them, and returns decision state", asyn
     assert.equal(dashboard.body.totals.chainEventCount, 1);
     assert.equal(dashboard.body.totals.matchedNotionalUsd, 7000);
     assert.equal(dashboard.body.totals.residualNotionalUsd, 3000);
+    assert.equal(dashboard.body.totals.historicalResidualNotionalUsd, 3000);
     assert.equal(dashboard.body.totals.internalMatchRate, 0.7);
     assert.equal(dashboard.body.totals.externalLiquidityAvoidedUsd, 14000);
     assert.equal(dashboard.body.latestMatch.matchId, "api_match_mnt");
     assert.equal(dashboard.body.latestDecision.decisionId, "api_decision_mnt");
     assert.equal(dashboard.body.recentEvents[0].eventName, "HedgeMatched");
+
+    await invokeJson(handler, "POST", "/api/intents", {
+      intentId: "api_cancel_meth",
+      user: "0xC000000000000000000000000000000000000003",
+      asset: "mETH",
+      direction: "SHORT",
+      notionalUsd: 500,
+      durationMinutes: 60,
+      maxCostBps: 20,
+      urgency: "LOW"
+    });
+    const cancelled = await invokeJson(handler, "POST", "/api/intents/api_cancel_meth/cancel", {
+      user: "0xC000000000000000000000000000000000000003"
+    });
+    assert.equal(cancelled.status, 200);
+    assert.equal(cancelled.body.status, "CANCELLED");
+
+    const cancelledBook = await invokeJson(handler, "GET", "/api/intents?asset=mETH");
+    assert.equal(cancelledBook.status, 200);
+    assert.equal(cancelledBook.body.shortDemandUsd, 0);
+
+    await prisma.hedgeIntent.create({
+      data: {
+        id: "api_expired_usdc",
+        walletAddress: "0xD000000000000000000000000000000000000004",
+        asset: "USDC",
+        direction: "LONG",
+        notionalUsd: 500,
+        durationMinutes: 1,
+        maxCostBps: 10,
+        urgency: "LOW",
+        status: "OPEN",
+        filledNotionalUsd: 0,
+        createdAt: new Date(NOW - 120_000),
+        expiresAt: new Date(NOW - 60_000)
+      }
+    });
+
+    const expired = await invokeJson(handler, "POST", "/api/intents/expire", {
+      asset: "USDC"
+    });
+    assert.equal(expired.status, 200);
+    assert.equal(expired.body.expiredCount, 1);
+    assert.equal(expired.body.intents[0].status, "EXPIRED");
+
+    const expiredIntent = await prisma.hedgeIntent.findUniqueOrThrow({
+      where: { id: "api_expired_usdc" }
+    });
+    assert.equal(expiredIntent.status, "EXPIRED");
   } finally {
     await prisma.$disconnect();
     rmSync(dbPath, { force: true });

@@ -81,6 +81,58 @@ Response:
 
 The API persists the intent into the `HedgeIntent` table.
 
+## POST /api/intents/:intentId/cancel
+
+Cancel an active intent in the database after the owner signs the cancellation
+flow. The web console calls the Mantle Sepolia `cancelIntent(bytes32)` contract
+function first when the intent has an `onchainIntentId`, then persists the
+status transition here.
+
+Request:
+
+```json
+{
+  "user": "0x123"
+}
+```
+
+Response:
+
+```json
+{
+  "intentId": "intent_001",
+  "status": "CANCELLED"
+}
+```
+
+## POST /api/intents/expire
+
+Mark stale active intents as expired. Matching already excludes expired intents
+by timestamp; this endpoint updates their persisted status so the intent book is
+operationally clear.
+
+Request:
+
+```json
+{
+  "asset": "MNT"
+}
+```
+
+Response:
+
+```json
+{
+  "expiredCount": 1,
+  "intents": [
+    {
+      "intentId": "intent_001",
+      "status": "EXPIRED"
+    }
+  ]
+}
+```
+
 ## GET /api/intents?asset=MNT
 
 Return intent book summary.
@@ -114,6 +166,7 @@ Response:
     "chainEventCount": 3,
     "matchedNotionalUsd": 7000,
     "residualNotionalUsd": 3000,
+    "historicalResidualNotionalUsd": 3000,
     "internalMatchRate": 0.7,
     "naiveExternalVolumeUsd": 17000,
     "meshExternalVolumeUsd": 3000,

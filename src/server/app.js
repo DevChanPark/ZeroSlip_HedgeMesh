@@ -4,7 +4,9 @@ import { URL } from "node:url";
 
 import {
   buildCostComparison,
+  cancelHedgeIntent,
   createHedgeIntent,
+  expireHedgeIntents,
   getDashboard,
   getDecision,
   listChainEvents,
@@ -57,6 +59,29 @@ export function createRequestHandler({ prisma, now = () => Date.now() }) {
           asset: url.searchParams.get("asset")
         });
         return sendJson(res, 200, result);
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/intents/expire") {
+        const body = await readJson(req);
+        const result = await expireHedgeIntents(prisma, body, { now: now() });
+        return sendJson(
+          res,
+          result.status,
+          result.ok
+            ? { expiredCount: result.expiredCount, intents: result.intents }
+            : { errors: result.errors }
+        );
+      }
+
+      if (
+        req.method === "POST" &&
+        url.pathname.startsWith("/api/intents/") &&
+        url.pathname.endsWith("/cancel")
+      ) {
+        const body = await readJson(req);
+        const intentId = decodeURIComponent(url.pathname.split("/").at(-2));
+        const result = await cancelHedgeIntent(prisma, intentId, body);
+        return sendJson(res, result.status, result.ok ? result.intent : { errors: result.errors });
       }
 
       if (req.method === "GET" && url.pathname === "/api/dashboard") {
