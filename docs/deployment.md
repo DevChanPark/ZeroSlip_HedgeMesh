@@ -35,7 +35,8 @@ explanation use deterministic local fallbacks.
 ```bash
 npm install
 npm run db:generate
-npm run db:seed
+npm run db:init
+npm run demo:reset:golden
 npm run compile
 npm run chain:check
 ```
@@ -43,7 +44,13 @@ npm run chain:check
 For a clean database with the committed migration:
 
 ```bash
-npx prisma migrate deploy
+npm run db:init
+```
+
+For a repeatable judge demo database:
+
+```bash
+npm run demo:reset
 ```
 
 ## Deploy Contracts

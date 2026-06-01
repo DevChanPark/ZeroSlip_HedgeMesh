@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { PrismaClient } from "@prisma/client";
 
 import { compareCosts } from "../src/core/cost.js";
@@ -5,7 +7,7 @@ import { buildAgentDecision } from "../src/core/decision.js";
 import { matchIntents } from "../src/core/matching.js";
 
 const prisma = new PrismaClient();
-const NOW = Date.parse("2026-05-20T00:00:00.000Z");
+const NOW = Date.now();
 const MATCH_ID = "db_demo_match_mnt";
 const DECISION_ID = "db_demo_decision_mnt";
 
@@ -158,4 +160,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-

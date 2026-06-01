@@ -57,6 +57,7 @@ const els = {
   chainOutput: document.querySelector("#chainOutput"),
   metricInternalMatch: document.querySelector("#metricInternalMatch"),
   metricResidual: document.querySelector("#metricResidual"),
+  metricMatchRate: document.querySelector("#metricMatchRate"),
   metricAvoided: document.querySelector("#metricAvoided"),
   metricSaved: document.querySelector("#metricSaved")
 };
@@ -107,9 +108,9 @@ async function parseIntent() {
     state.parsed = parsed;
     els.asset.value = parsed.asset ?? "MNT";
     els.direction.value = parsed.direction ?? "SHORT";
-    els.notionalUsd.value = parsed.notionalUsd ?? 1000;
+    els.notionalUsd.value = parsed.notionalUsd ?? 10000;
     els.durationMinutes.value = parsed.durationMinutes ?? 60;
-    els.maxCostBps.value = parsed.maxCostBps ?? 10;
+    els.maxCostBps.value = parsed.maxCostBps ?? 30;
     els.urgency.value = parsed.urgency ?? "MEDIUM";
     writeOutput(els.intentOutput, parsed);
   });
@@ -311,6 +312,7 @@ function renderMetrics(result) {
   const { matchResult, costComparison } = result;
   els.metricInternalMatch.textContent = usd(matchResult.matchedNotionalUsd);
   els.metricResidual.textContent = `${usd(matchResult.residualNotionalUsd)} ${matchResult.residualDirection}`;
+  els.metricMatchRate.textContent = `${Math.round(matchResult.internalMatchRate * 100)}%`;
   els.metricAvoided.textContent = usd(costComparison.externalLiquidityAvoidedUsd);
   els.metricSaved.textContent = `${costComparison.savedCostBps} bps`;
 }

@@ -12,6 +12,7 @@
         <div>
           <p class="eyebrow">Mantle Sepolia</p>
           <h1>ZeroSlip HedgeMesh</h1>
+          <p class="tagline">AI-assisted hedge intent netting before residual exposure touches external liquidity.</p>
         </div>
         <div class="wallet-bar">
           <span id="networkStatus" class="status-pill muted">Wallet offline</span>
@@ -36,6 +37,10 @@
           <strong id="metricResidual">$0</strong>
         </article>
         <article class="metric">
+          <span>Internal Match Rate</span>
+          <strong id="metricMatchRate">0%</strong>
+        </article>
+        <article class="metric">
           <span>Liquidity Avoided</span>
           <strong id="metricAvoided">$0</strong>
         </article>
@@ -57,7 +62,7 @@
 
           <label class="field full">
             <span>Natural language</span>
-            <textarea id="naturalLanguage" rows="4">I want to hedge $1,000 of MNT downside risk for 1 hour. Keep cost under 10 bps.</textarea>
+            <textarea id="naturalLanguage" rows="4">I want to hedge $10,000 of MNT downside risk for 1 hour. Keep cost under 30 bps.</textarea>
           </label>
 
           <div class="form-grid">
@@ -78,7 +83,7 @@
             </label>
             <label class="field">
               <span>Notional USD</span>
-              <input id="notionalUsd" min="1" step="1" type="number" value="1000" />
+              <input id="notionalUsd" min="1" step="1" type="number" value="10000" />
             </label>
             <label class="field">
               <span>Duration minutes</span>
@@ -86,7 +91,7 @@
             </label>
             <label class="field">
               <span>Max cost bps</span>
-              <input id="maxCostBps" min="0" step="1" type="number" value="10" />
+              <input id="maxCostBps" min="0" step="1" type="number" value="30" />
             </label>
             <label class="field">
               <span>Urgency</span>

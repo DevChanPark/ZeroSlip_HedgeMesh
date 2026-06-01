@@ -56,7 +56,59 @@ contracts/       Solidity contract skeletons for intent and decision logging
 docs/            Product requirements, architecture, API, and demo notes
 scripts/         Local demo runners
 src/core/        Deterministic matching, cost, parser, and decision logic
+src/server/      Prisma-backed API, AI fallback, and chain reconciliation
+app/             Next.js web console for the judge-facing demo
 test/            Node test runner coverage for MVP logic
+```
+
+## Submission Demo
+
+For the Mantle wallet demo path, reset the local database into a predictable
+state with one seeded counterparty intent:
+
+```bash
+npm run db:init
+npm run demo:reset
+```
+
+Then run the API and web console in separate terminals:
+
+```bash
+npm run api
+npm run web
+```
+
+Open `http://127.0.0.1:3000`, connect the operator wallet on Mantle Sepolia,
+and submit the default `$10,000 SHORT MNT` hedge intent. The reset script
+already seeded a `$7,000 LONG MNT` counterparty, so pressing `Run Matching`
+produces the golden KPI:
+
+```text
+Internal match: $7,000
+Residual hedge: $3,000 SHORT
+Internal match rate: 70%
+External liquidity avoided: $14,000
+Saved cost: about 19 bps
+```
+
+Use `Sync Fills` to update the submitted on-chain intent status, then
+`Log Decision` to write the match and agent decision to Mantle Sepolia.
+
+If Next.js local build/dev startup is slow, use the static one-process console
+served by the API instead:
+
+```bash
+npm run api
+```
+
+Then open `http://127.0.0.1:3001`. This fallback console covers the same submit,
+match, KPI, and decision-log story without requiring the Next.js dev server.
+
+For a no-wallet rehearsal of the same KPI, use:
+
+```bash
+npm run demo:reset:golden
+npm run demo:db
 ```
 
 ## Local Engine Demo
@@ -66,7 +118,8 @@ nvm install
 nvm use
 npm install
 npm run db:generate
-npm run db:seed
+npm run db:init
+npm run demo:reset:golden
 npm test
 npm run demo
 npm run demo:db
@@ -118,6 +171,14 @@ Run the two commands in separate terminals. The Next.js console opens at
 `http://127.0.0.1:3000` and proxies `/api/*` requests to the backend on port
 `3001`. The web console uses wagmi/viem to submit intents and decision logs to
 the deployed Mantle Sepolia contracts.
+
+## Optional AI Layer
+
+OpenAI is optional for this MVP. If `OPENAI_API_KEY` is empty, the parser and
+decision explanation use deterministic local fallbacks, so development and demo
+rehearsal can run with no model API cost. If a valid key is configured, the
+API uses strict JSON structured output for parsing and explanation wording, but
+matching math, residual exposure, and cost comparison remain deterministic.
 
 ## MVP Scope
 

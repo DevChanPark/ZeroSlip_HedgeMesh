@@ -7,17 +7,48 @@ touching external liquidity.
 
 ## Demo Path
 
-1. Open the pitch view and show the problem: hedging reduces risk, but repeated
-   external execution creates slippage, fees, spreads, and market impact.
-2. Submit a natural-language SHORT MNT hedge intent.
-3. Submit or seed a compatible LONG MNT hedge intent.
-4. Show the intent book with LONG and SHORT demand.
-5. Run matching.
-6. Show internal match amount, residual hedge, match rate, and avoided external
+### Wallet Demo
+
+Prep:
+
+```bash
+npm run db:init
+npm run demo:reset
+npm run api
+npm run web
+```
+
+Path:
+
+1. Open `http://127.0.0.1:3000` and connect the operator wallet on Mantle
+   Sepolia.
+2. Show the deployed `IntentBook` and `MatchLog` contract links.
+3. Press `AI Parse` on the default `$10,000 SHORT MNT` natural-language hedge
+   request.
+4. Press `Submit to Mantle + DB` and show the `HedgeIntentSubmitted` tx hash.
+5. Show the intent book with the wallet-submitted SHORT demand and seeded
+   `$7,000 LONG MNT` counterparty demand.
+6. Press `Run Matching`.
+7. Show internal match amount, residual hedge, match rate, and avoided external
    liquidity.
-7. Show naive cost vs HedgeMesh cost.
-8. Show the agent decision explanation.
-9. Show Mantle tx hash for intent and decision logs.
+8. Press `Sync Fills` to update the submitted IntentBook state.
+9. Press `Log Decision` and show the `HedgeMatched` /
+   `AgentDecisionLogged` tx hashes.
+10. Close by showing dashboard KPIs and recent on-chain logs.
+
+If the Next.js dev server is slow locally, keep `npm run api` running and open
+`http://127.0.0.1:3001` instead. The API serves a static fallback console with
+the same core submit, matching, KPI, and decision-log flow.
+
+### No-Wallet Rehearsal
+
+```bash
+npm run demo:reset:golden
+npm run demo:db
+```
+
+This proves the same golden KPI with DB-backed state if wallet/RPC UX is slow
+during practice.
 
 ## Golden Numbers
 
@@ -39,3 +70,12 @@ ZeroSlip HedgeMesh is not trying to generate more volume. It is trying to make
 legitimate hedging cheaper by reducing the amount of volume that needs to hit
 external markets in the first place.
 
+## Failure Fallbacks
+
+- If the OpenAI key is empty or invalid, keep going. The deterministic parser
+  and decision explanation are the intended fallback.
+- If Mantle RPC is slow after `Submit to Mantle + DB`, use the explorer link to
+  show the submitted transaction and continue from the DB state.
+- If `Sync Fills` is not needed because the counterparty is local-only, explain
+  that the MVP records fills for any submitted on-chain intent and keeps
+  matching math off-chain for deterministic reproducibility.

@@ -376,9 +376,9 @@ const matchLogAbi = [
 const initialDraft: HedgeIntentDraft = {
   asset: "MNT",
   direction: "SHORT",
-  notionalUsd: 1000,
+  notionalUsd: 10000,
   durationMinutes: 60,
-  maxCostBps: 10,
+  maxCostBps: 30,
   urgency: "MEDIUM"
 };
 
@@ -392,7 +392,7 @@ export default function HomePage() {
   const publicClient = usePublicClient({ chainId: mantleSepolia.id });
 
   const [naturalLanguage, setNaturalLanguage] = useState(
-    "I want to hedge $1,000 of MNT downside risk for 1 hour. Keep cost under 10 bps."
+    "I want to hedge $10,000 of MNT downside risk for 1 hour. Keep cost under 30 bps."
   );
   const [draft, setDraft] = useState<HedgeIntentDraft>(initialDraft);
   const [parsed, setParsed] = useState<ParsedIntent | null>(null);
@@ -1129,6 +1129,9 @@ export default function HomePage() {
         <div>
           <p className="mb-1 text-xs font-extrabold uppercase text-mint">Mantle Sepolia</p>
           <h1 className="text-[28px] font-bold leading-tight md:text-4xl">ZeroSlip HedgeMesh</h1>
+          <p className="mt-2 max-w-2xl text-sm text-[#9ba7b1]">
+            AI-assisted hedge intent netting before residual exposure touches external liquidity.
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill tone={chainId === mantleSepolia.id ? "ready" : "warn"}>{networkLabel}</StatusPill>
@@ -1157,9 +1160,10 @@ export default function HomePage() {
         <StatusPill>Logs {dashboardTotals?.chainEventCount ?? events.length}</StatusPill>
       </section>
 
-      <section className="mb-4 grid gap-3 md:grid-cols-4">
+      <section className="mb-4 grid gap-3 md:grid-cols-5">
         <Metric label="Matched Notional" value={usd(metrics.internalMatch)} />
         <Metric label="Residual Hedge" value={`${usd(metrics.residual)} ${metrics.residualDirection}`} />
+        <Metric label="Internal Match Rate" value={`${Math.round(metrics.internalMatchRate * 100)}%`} />
         <Metric label="Liquidity Avoided" value={usd(metrics.avoided)} />
         <Metric label="Avg Saved Cost" value={`${metrics.saved} bps`} />
       </section>

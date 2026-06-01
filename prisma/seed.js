@@ -1,9 +1,11 @@
+import "dotenv/config";
+
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-const now = new Date("2026-05-20T00:00:00.000Z");
-const expiresAt = new Date(now.getTime() + 60 * 60 * 1000);
+const now = new Date();
+const expiresAt = new Date(now.getTime() + 4 * 60 * 60 * 1000);
 
 async function main() {
   await prisma.hedgeIntent.upsert({

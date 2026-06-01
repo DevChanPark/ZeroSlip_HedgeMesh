@@ -2,8 +2,6 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { createPublicClient, http, parseAbiItem } from "viem";
-
 import { recordChainEvent } from "./hedge-service.js";
 
 const NETWORK = {
@@ -26,24 +24,38 @@ const MANTLE_SEPOLIA_CHAIN = {
   }
 };
 
-const CONTRACT_EVENTS = {
+const CONTRACT_EVENT_SIGNATURES = {
   IntentBook: [
-    parseAbiItem(
-      "event HedgeIntentSubmitted(bytes32 indexed intentId, address indexed user, string asset, string direction, uint256 notionalUsd, uint256 durationMinutes, uint256 maxCostBps, uint256 createdAt, uint256 expiresAt)"
-    ),
-    parseAbiItem("event HedgeIntentCancelled(bytes32 indexed intentId, address indexed user)"),
-    parseAbiItem("event HedgeIntentExpired(bytes32 indexed intentId, address indexed user)"),
-    parseAbiItem(
-      "event HedgeIntentMatched(bytes32 indexed intentId, address indexed user, uint256 matchedNotionalUsd, uint256 filledNotionalUsd, uint8 status)"
-    )
+    {
+      name: "HedgeIntentSubmitted",
+      signature:
+        "event HedgeIntentSubmitted(bytes32 indexed intentId, address indexed user, string asset, string direction, uint256 notionalUsd, uint256 durationMinutes, uint256 maxCostBps, uint256 createdAt, uint256 expiresAt)"
+    },
+    {
+      name: "HedgeIntentCancelled",
+      signature: "event HedgeIntentCancelled(bytes32 indexed intentId, address indexed user)"
+    },
+    {
+      name: "HedgeIntentExpired",
+      signature: "event HedgeIntentExpired(bytes32 indexed intentId, address indexed user)"
+    },
+    {
+      name: "HedgeIntentMatched",
+      signature:
+        "event HedgeIntentMatched(bytes32 indexed intentId, address indexed user, uint256 matchedNotionalUsd, uint256 filledNotionalUsd, uint8 status)"
+    }
   ],
   MatchLog: [
-    parseAbiItem(
-      "event HedgeMatched(bytes32 indexed matchId, string asset, uint256 matchedNotionalUsd, uint256 residualNotionalUsd, uint256 estimatedSavingsBps, uint256 createdAt)"
-    ),
-    parseAbiItem(
-      "event AgentDecisionLogged(bytes32 indexed decisionId, string decisionType, uint256 internalMatchUsd, uint256 residualUsd, uint256 estimatedSavingsBps, uint256 createdAt)"
-    )
+    {
+      name: "HedgeMatched",
+      signature:
+        "event HedgeMatched(bytes32 indexed matchId, string asset, uint256 matchedNotionalUsd, uint256 residualNotionalUsd, uint256 estimatedSavingsBps, uint256 createdAt)"
+    },
+    {
+      name: "AgentDecisionLogged",
+      signature:
+        "event AgentDecisionLogged(bytes32 indexed decisionId, string decisionType, uint256 internalMatchUsd, uint256 residualUsd, uint256 estimatedSavingsBps, uint256 createdAt)"
+    }
   ]
 };
 
@@ -55,7 +67,7 @@ export async function syncMantleSepoliaEvents(prisma, input = {}, options = {}) 
 
   const deployments = await loadDeployments(prisma, network);
   const contracts = deployments.filter((deployment) => {
-    if (!CONTRACT_EVENTS[deployment.contractName]) return false;
+    if (!CONTRACT_EVENT_SIGNATURES[deployment.contractName]) return false;
     return !input.contractName || deployment.contractName === input.contractName;
   });
 
@@ -64,15 +76,7 @@ export async function syncMantleSepoliaEvents(prisma, input = {}, options = {}) 
   }
 
   const rpcUrl = options.rpcUrl ?? process.env.MANTLE_SEPOLIA_RPC_URL ?? NETWORK.rpcUrl;
-  const client =
-    options.client ??
-    createPublicClient({
-      chain: {
-        ...MANTLE_SEPOLIA_CHAIN,
-        rpcUrls: { default: { http: [rpcUrl] } }
-      },
-      transport: http(rpcUrl)
-    });
+  const client = options.client ?? (await createMantlePublicClient(rpcUrl));
 
   const latestBlock = await resolveLatestBlock(client, input.toBlock);
   const fromBlock = await resolveFromBlock(prisma, network, contracts, input.fromBlock);
@@ -96,7 +100,8 @@ export async function syncMantleSepoliaEvents(prisma, input = {}, options = {}) 
   let duplicateCount = 0;
 
   for (const deployment of contracts) {
-    for (const event of CONTRACT_EVENTS[deployment.contractName]) {
+    const contractEvents = await getContractEvents(deployment.contractName, { lightweight: Boolean(options.client) });
+    for (const event of contractEvents) {
       const logs = await client.getLogs({
         address: deployment.contractAddress,
         event,
@@ -134,6 +139,25 @@ export async function syncMantleSepoliaEvents(prisma, input = {}, options = {}) 
     duplicateCount,
     events
   };
+}
+
+async function createMantlePublicClient(rpcUrl) {
+  const { createPublicClient, http } = await import("viem");
+  return createPublicClient({
+    chain: {
+      ...MANTLE_SEPOLIA_CHAIN,
+      rpcUrls: { default: { http: [rpcUrl] } }
+    },
+    transport: http(rpcUrl)
+  });
+}
+
+async function getContractEvents(contractName, options = {}) {
+  const signatures = CONTRACT_EVENT_SIGNATURES[contractName] ?? [];
+  if (options.lightweight) return signatures.map((event) => ({ name: event.name }));
+
+  const { parseAbiItem } = await import("viem");
+  return signatures.map((event) => parseAbiItem(event.signature));
 }
 
 export async function loadDeployments(prisma, network) {

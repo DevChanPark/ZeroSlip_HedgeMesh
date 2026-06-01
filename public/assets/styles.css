@@ -87,6 +87,13 @@ h1 {
   line-height: 1.1;
 }
 
+.tagline {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 8px 0 0;
+  max-width: 680px;
+}
+
 h2 {
   font-size: 20px;
   line-height: 1.2;
@@ -136,7 +143,7 @@ h2 {
 .metric-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-bottom: 16px;
 }
 

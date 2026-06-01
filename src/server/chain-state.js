@@ -1,5 +1,3 @@
-import { createPublicClient, http } from "viem";
-
 import { loadDeployments } from "./chain-sync.js";
 
 const LOCAL_ONLY_STATUS = "LOCAL_ONLY";
@@ -66,19 +64,15 @@ export async function reconcileMantleSepoliaIntents(prisma, input = {}, options 
   });
 
   const rpcUrl = options.rpcUrl ?? process.env.MANTLE_SEPOLIA_RPC_URL ?? NETWORK.rpcUrl;
-  const client =
-    options.client ??
-    createPublicClient({
-      chain: {
-        ...MANTLE_SEPOLIA_CHAIN,
-        rpcUrls: { default: { http: [rpcUrl] } }
-      },
-      transport: http(rpcUrl)
-    });
+  let client = options.client ?? null;
+  async function getClient() {
+    client ??= await createMantlePublicClient(rpcUrl);
+    return client;
+  }
 
   const rows = [];
   for (const intent of dbIntents) {
-    rows.push(await reconcileIntent(client, intentBook, intent));
+    rows.push(await reconcileIntent(getClient, intentBook, intent));
   }
 
   const summary = rows.reduce(
@@ -112,6 +106,17 @@ export async function reconcileMantleSepoliaIntents(prisma, input = {}, options 
     summary,
     intents: rows
   };
+}
+
+async function createMantlePublicClient(rpcUrl) {
+  const { createPublicClient, http } = await import("viem");
+  return createPublicClient({
+    chain: {
+      ...MANTLE_SEPOLIA_CHAIN,
+      rpcUrls: { default: { http: [rpcUrl] } }
+    },
+    transport: http(rpcUrl)
+  });
 }
 
 export async function repairMantleSepoliaIntents(prisma, input = {}, options = {}) {
@@ -191,7 +196,7 @@ export async function repairMantleSepoliaIntents(prisma, input = {}, options = {
   };
 }
 
-async function reconcileIntent(client, intentBook, intent) {
+async function reconcileIntent(getClient, intentBook, intent) {
   const db = serializeDbIntent(intent);
   const row = {
     intentId: intent.id,
@@ -228,6 +233,7 @@ async function reconcileIntent(client, intentBook, intent) {
   }
 
   try {
+    const client = await getClient();
     const raw = await client.readContract({
       address: intentBook.contractAddress,
       abi: INTENT_BOOK_ABI,
